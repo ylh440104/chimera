@@ -72,7 +72,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         runButton.isEnabled = false
-        job = Thread {
+        val worker = Thread {
             try {
                 val staging = File(cacheDir, "staging")
                 staging.deleteRecursively()
@@ -143,7 +143,9 @@ class MainActivity : AppCompatActivity() {
             } finally {
                 job = null
             }
-        }.start()
+        }
+        job = worker
+        worker.start()
     }
 
     private fun runLoaded() {
@@ -152,7 +154,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         runButton.isEnabled = false
-        job = Thread {
+        val worker = Thread {
             try {
                 log("执行主入口")
                 log(Native.run())
@@ -165,7 +167,9 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread { runButton.isEnabled = true }
                 job = null
             }
-        }.start()
+        }
+        job = worker
+        worker.start()
     }
 
     override fun onDestroy() {
