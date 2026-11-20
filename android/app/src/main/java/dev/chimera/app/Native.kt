@@ -7,6 +7,6 @@ class Native {
         }
 
         @JvmStatic
-        external fun run(path: String): Int
+        external fun run(path: String): String
     }
 }

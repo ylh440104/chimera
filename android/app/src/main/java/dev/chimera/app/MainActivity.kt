@@ -71,23 +71,17 @@ class MainActivity : AppCompatActivity() {
                     log("无法打开该文件")
                     return@Thread
                 }
-                val declared = afd.length
-                log("声明长度 " + declared)
+                log("声明长度 " + afd.length)
                 afd.use { d ->
                     FileOutputStream(cached).use { out ->
                         d.createInputStream().use { input ->
                             val buf = ByteArray(1 shl 16)
                             var total = 0L
-                            var mark = 0L
                             while (true) {
                                 val n = input.read(buf)
                                 if (n <= 0) break
                                 out.write(buf, 0, n)
                                 total += n
-                                if (total - mark >= (8 shl 20)) {
-                                    mark = total
-                                    log("已读 " + total)
-                                }
                             }
                             log("读完 " + total)
                         }
@@ -152,11 +146,11 @@ class MainActivity : AppCompatActivity() {
             exe.inputStream().use { it.read(magic) }
             log("magic " + magic.joinToString(" ") { String.format("%02x", it) })
 
-            val rc = Native.run(exe.absolutePath)
-            log("返回 " + rc)
+            val report = Native.run(exe.absolutePath)
+            log("---- 报告 ----")
+            report.split("\n").forEach { if (it.isNotEmpty()) log(it) }
         } catch (t: Throwable) {
             log("失败 " + t)
-            t.stackTrace.take(4).forEach { log("  at " + it) }
         }
     }
 

@@ -1,10 +1,31 @@
 #include "chm.h"
+#include "chm_rt.h"
 
 #include <errno.h>
+#include <fcntl.h>
+#include <setjmp.h>
+#include <signal.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+
+#define CHM_MISSING_MAX 64
+#define CHM_MISSING_NAME 128
+#define CHM_ALTSTACK_SIZE 32768
+#define CHM_LC_ENCRYPTION_INFO 0x21u
+#define CHM_LC_ENCRYPTION_INFO_64 0x2cu
+
+static char g_missing[CHM_MISSING_MAX][CHM_MISSING_NAME];
+static int g_missing_count;
+static char g_last_missing[CHM_MISSING_NAME];
+static char g_fault[256];
+static sigjmp_buf g_jump;
+static volatile sig_atomic_t g_armed;
+static char g_altstack[CHM_ALTSTACK_SIZE];
 
 static ssize_t sh_write(int fd, const void *buf, size_t n)
 {
@@ -34,6 +55,8 @@ static uint64_t sh_absolute_time(void)
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
+static void sh_trap_missing(void);
+
 typedef struct {
     const char *name;
     void *addr;
@@ -62,6 +85,34 @@ static const chm_shim_entry chm_shims[] = {
     { NULL, NULL }
 };
 
+static void note_missing(const char *name)
+{
+    int i;
+
+    if (!name || !name[0])
+        return;
+    for (i = 0; i < g_missing_count; i++) {
+        if (strcmp(g_missing[i], name) == 0)
+            return;
+    }
+    if (g_missing_count < CHM_MISSING_MAX) {
+        snprintf(g_missing[g_missing_count], CHM_MISSING_NAME, "%s", name);
+        g_missing_count++;
+    }
+}
+
+int chm_missing_count(void)
+{
+    return g_missing_count;
+}
+
+const char *chm_missing_at(int index)
+{
+    if (index < 0 || index >= g_missing_count)
+        return NULL;
+    return g_missing[index];
+}
+
 void *chm_resolve_import(const char *name)
 {
     const chm_shim_entry *e;
@@ -77,5 +128,109 @@ void *chm_resolve_import(const char *name)
         if (strcmp(e->name, name) == 0)
             return e->addr;
     }
-    return NULL;
+    snprintf(g_last_missing, sizeof(g_last_missing), "%s", name ? name : "?");
+    note_missing(g_last_missing);
+    return (void *)sh_trap_missing;
+}
+
+static void sh_trap_missing(void)
+{
+    if (!g_armed)
+        _exit(4);
+    snprintf(g_fault, sizeof(g_fault), "unimplemented symbol %s", g_last_missing);
+    g_armed = 0;
+    siglongjmp(g_jump, 1);
+}
+
+static void chm_fault_handler(int sig, siginfo_t *info, void *ctx)
+{
+    (void)ctx;
+    if (!g_armed)
+        _exit(3);
+    snprintf(g_fault, sizeof(g_fault), "signal %d at %p after %s",
+             sig, info ? info->si_addr : NULL,
+             g_last_missing[0] ? g_last_missing : "no import");
+    g_armed = 0;
+    siglongjmp(g_jump, 1);
+}
+
+void chm_install_fault_handler(void)
+{
+    struct sigaction sa;
+    stack_t ss;
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = chm_fault_handler;
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    sigaction(SIGSEGV, &sa, NULL);
+    sigaction(SIGBUS, &sa, NULL);
+    sigaction(SIGILL, &sa, NULL);
+    sigaction(SIGFPE, &sa, NULL);
+
+    ss.ss_sp = g_altstack;
+    ss.ss_size = sizeof(g_altstack);
+    ss.ss_flags = 0;
+    sigaltstack(&ss, NULL);
+}
+
+int chm_run_guarded(chm_image *img, int argc, char **argv, char *err, size_t cap)
+{
+    int rc;
+
+    g_armed = 1;
+    if (sigsetjmp(g_jump, 1) == 0) {
+        rc = chm_run(img, argc, argv);
+        g_armed = 0;
+        return rc;
+    }
+    if (err && cap)
+        snprintf(err, cap, "%s", g_fault);
+    return -2;
+}
+
+int chm_is_encrypted(const char *path)
+{
+    int fd;
+    struct stat st;
+    const uint8_t *base;
+    const uint8_t *p;
+    const uint8_t *end;
+    uint32_t i;
+    int cryptid = -1;
+
+    fd = open(path, O_RDONLY);
+    if (fd < 0)
+        return -1;
+    if (fstat(fd, &st) != 0 || st.st_size < (off_t)sizeof(struct chm_mach_header)) {
+        close(fd);
+        return -1;
+    }
+    base = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+    if (base == MAP_FAILED)
+        return -1;
+    if (((const struct chm_mach_header *)base)->magic != CHM_MH_MAGIC_64) {
+        munmap((void *)base, (size_t)st.st_size);
+        return -1;
+    }
+
+    p = base + sizeof(struct chm_mach_header);
+    end = base + st.st_size;
+    for (i = 0; i < ((const struct chm_mach_header *)base)->ncmds; i++) {
+        const struct chm_load_command *lc;
+
+        if ((size_t)(end - p) < sizeof(struct chm_load_command))
+            break;
+        lc = (const struct chm_load_command *)p;
+        if (lc->cmdsize < sizeof(struct chm_load_command) || (size_t)lc->cmdsize > (size_t)(end - p))
+            break;
+        if (lc->cmd == CHM_LC_ENCRYPTION_INFO_64 || lc->cmd == CHM_LC_ENCRYPTION_INFO) {
+            const uint32_t *v = (const uint32_t *)p;
+            cryptid = (int)v[4];
+            break;
+        }
+        p += lc->cmdsize;
+    }
+    munmap((void *)base, (size_t)st.st_size);
+    return cryptid;
 }
