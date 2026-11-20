@@ -269,10 +269,11 @@ chm_session *chm_session_create(void)
     s->exports = calloc(CHM_MAX_EXPORTS, sizeof(*s->exports));
     s->missing = calloc(CHM_MAX_MISSING, sizeof(*s->missing));
     s->classes = calloc(CHM_MAX_CLASSES, sizeof(*s->classes));
+    s->methods = calloc(CHM_MAX_METHOD_REGS, sizeof(*s->methods));
     s->sels = calloc(CHM_MAX_SELS, sizeof(*s->sels));
     s->log_cap = 16384;
     s->log_buf = calloc(1, s->log_cap);
-    if (!s->exports || !s->missing || !s->classes || !s->sels || !s->log_buf) {
+    if (!s->exports || !s->missing || !s->classes || !s->methods || !s->sels || !s->log_buf) {
         chm_session_destroy(s);
         return NULL;
     }
@@ -298,6 +299,7 @@ void chm_session_destroy(chm_session *s)
     free(s->exports);
     free(s->missing);
     free(s->classes);
+    free(s->methods);
     free(s->log_buf);
     chm_foundation_shutdown();
     free(s);
@@ -394,10 +396,8 @@ int chm_session_load(chm_session *s, const char *exe_path)
         }
     }
 
-    for (idx = s->image_count - 1; idx >= 0; idx--) {
+    for (idx = 0; idx < s->image_count; idx++)
         collect_exports(s, idx);
-        chm_objc_session_scan(s, idx);
-    }
 
     for (idx = s->image_count - 1; idx >= 0; idx--) {
         s->images[idx].resolver = session_resolve;
@@ -410,6 +410,9 @@ int chm_session_load(chm_session *s, const char *exe_path)
                         idx, s->images[idx].nfixup_bind, s->images[idx].nfixup_missing,
                         s->images[idx].nfixup_rebase, s->images[idx].executable);
     }
+
+    for (idx = s->image_count - 1; idx >= 0; idx--)
+        chm_objc_session_scan(s, idx);
     s->prepared = true;
     return 0;
 }

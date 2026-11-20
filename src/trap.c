@@ -23,6 +23,8 @@ static uint64_t g_far;
 static int g_signal;
 static int g_installed;
 
+static uint64_t g_regs[4];
+
 static void handler(int sig, siginfo_t *info, void *ctx)
 {
     ucontext_t *uc = ctx;
@@ -33,6 +35,10 @@ static void handler(int sig, siginfo_t *info, void *ctx)
         g_pc = (uint64_t)uc->uc_mcontext.pc;
         g_lr = (uint64_t)uc->uc_mcontext.regs[30];
         g_sp = (uint64_t)uc->uc_mcontext.sp;
+        g_regs[0] = (uint64_t)uc->uc_mcontext.regs[0];
+        g_regs[1] = (uint64_t)uc->uc_mcontext.regs[1];
+        g_regs[2] = (uint64_t)uc->uc_mcontext.regs[2];
+        g_regs[3] = (uint64_t)uc->uc_mcontext.regs[3];
     }
     if (!g_armed)
         _exit(9);
@@ -77,6 +83,50 @@ static void run_body(void *p)
     a->rc = chm_run(a->img, a->argc, a->argv);
 }
 
+static void describe_pc(chm_session *s, uint64_t pc)
+{
+    int i;
+    uint32_t k;
+
+    if (!s)
+        return;
+    for (i = 0; i < s->image_count; i++) {
+        chm_image *img = &s->images[i];
+
+        if (pc < img->vm_min + img->slide || pc >= img->vm_max + img->slide)
+            continue;
+        chm_session_log(s, "fault inside image[%d] %s offset 0x%llx",
+                        i, s->image_paths[i], (unsigned long long)(pc - img->vm_min - img->slide));
+        for (k = 0; k < img->nsegs; k++) {
+            chm_segment *seg = &img->segs[k];
+
+            if (!seg->vmsize || !strcmp(seg->name, "__PAGEZERO"))
+                continue;
+            uint64_t start = seg->vmaddr + img->slide;
+
+            if (pc >= start && pc < start + seg->vmsize) {
+                chm_session_log(s, "fault in segment %s +0x%llx", seg->name,
+                                (unsigned long long)(pc - start));
+                for (uint32_t j = 0; j < seg->nsects; j++) {
+                    chm_section *sec = &seg->sects[j];
+                    uint64_t sstart = sec->addr + img->slide;
+
+                    if (pc >= sstart && pc < sstart + sec->size)
+                        chm_session_log(s, "fault in section %s +0x%llx", sec->sect,
+                                        (unsigned long long)(pc - sstart));
+                }
+                return;
+            }
+        }
+        return;
+    }
+    chm_session_log(s, "fault pc outside loaded images");
+    for (i = 0; i < s->image_count; i++)
+        chm_session_log(s, "image[%d] %s range 0x%llx-0x%llx", i, s->image_paths[i],
+                        (unsigned long long)(s->images[i].vm_min + s->images[i].slide),
+                        (unsigned long long)(s->images[i].vm_max + s->images[i].slide));
+}
+
 int chm_session_execute(chm_session *s, chm_image *img, int argc, char **argv)
 {
     run_args a;
@@ -104,12 +154,17 @@ int chm_session_execute(chm_session *s, chm_image *img, int argc, char **argv)
         if (dladdr((void *)(uintptr_t)g_pc, &di) && di.dli_sname)
             sym = (void *)di.dli_sname;
         snprintf(g_fault, sizeof(g_fault),
-                 "signal %d fault_addr 0x%llx pc 0x%llx lr 0x%llx sp 0x%llx in %s",
+                 "signal %d fault 0x%llx pc 0x%llx lr 0x%llx sp 0x%llx x0 0x%llx x1 0x%llx pc_rel 0x%llx lr_rel 0x%llx in %s",
                  g_signal, (unsigned long long)g_far, (unsigned long long)g_pc,
                  (unsigned long long)g_lr, (unsigned long long)g_sp,
+                 (unsigned long long)g_regs[0], (unsigned long long)g_regs[1],
+                 (unsigned long long)(g_pc - (uint64_t)(uintptr_t)&chm_session_execute),
+                 (unsigned long long)(g_lr - (uint64_t)(uintptr_t)&chm_session_execute),
                  sym ? (const char *)sym : "unknown");
     }
     chm_session_log(s, "%s", g_fault);
+    describe_pc(s, g_pc);
+    chm_objc_dump_trace(s);
     return -2;
 }
 

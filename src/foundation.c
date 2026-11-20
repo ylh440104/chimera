@@ -238,6 +238,29 @@ static void *ns_class_impl(void *self)
     return self ? *(void **)self : NULL;
 }
 
+static void *make_object(void)
+{
+    chm_builtin *base = find_builtin("NSObject");
+    void *obj = calloc(1, 128);
+
+    if (!obj)
+        return NULL;
+    if (base)
+        *(void **)obj = &base->cls;
+    return obj;
+}
+
+static void *ns_nil_impl(void)
+{
+    return make_object();
+}
+
+static int ns_false_impl(void *self)
+{
+    (void)self;
+    return 0;
+}
+
 static const char *ns_description_impl(void *self)
 {
     chm_builtin *b;
@@ -282,12 +305,81 @@ static const chm_method_seed g_methods[] = {
     { "boolValue", (void *)ns_zero },
     { "UTF8String", (void *)ns_description_impl },
     { "absoluteString", (void *)ns_description_impl },
+    { "processInfo", (void *)ns_nil_impl },
+    { "defaultManager", (void *)ns_nil_impl },
+    { "mainBundle", (void *)ns_nil_impl },
+    { "bundleWithIdentifier:", (void *)ns_nil_impl },
+    { "standardUserDefaults", (void *)ns_nil_impl },
+    { "sharedApplication", (void *)ns_nil_impl },
+    { "currentDevice", (void *)ns_nil_impl },
+    { "mainScreen", (void *)ns_nil_impl },
+    { "sharedSession", (void *)ns_nil_impl },
+    { "defaultSessionConfiguration", (void *)ns_nil_impl },
+    { "ephemeralSessionConfiguration", (void *)ns_nil_impl },
+    { "generalPasteboard", (void *)ns_nil_impl },
+    { "defaultCenter", (void *)ns_nil_impl },
+    { "currentThread", (void *)ns_nil_impl },
+    { "mainRunLoop", (void *)ns_nil_impl },
+    { "currentRunLoop", (void *)ns_nil_impl },
+    { "mainQueue", (void *)ns_nil_impl },
+    { "standardCharacterSet", (void *)ns_nil_impl },
+    { "URLWithString:", (void *)ns_nil_impl },
+    { "fileURLWithPath:", (void *)ns_nil_impl },
+    { "stringWithUTF8String:", (void *)ns_nil_impl },
+    { "stringWithFormat:", (void *)ns_nil_impl },
+    { "array", (void *)ns_nil_impl },
+    { "dictionary", (void *)ns_nil_impl },
+    { "set", (void *)ns_nil_impl },
+    { "data", (void *)ns_nil_impl },
+    { "date", (void *)ns_nil_impl },
+    { "null", (void *)ns_nil_impl },
+    { "valueWithBool:", (void *)ns_nil_impl },
+    { "numberWithInteger:", (void *)ns_nil_impl },
+    { "numberWithInt:", (void *)ns_nil_impl },
+    { "numberWithFloat:", (void *)ns_nil_impl },
+    { "numberWithDouble:", (void *)ns_nil_impl },
+    { "assetWithURL:", (void *)ns_nil_impl },
+    { "requestWithURL:", (void *)ns_nil_impl },
+    { "layer", (void *)ns_nil_impl },
+    { "displayLinkWithTarget:selector:", (void *)ns_nil_impl },
+    { "filterWithName:", (void *)ns_nil_impl },
+    { "controllerPausedHandler", (void *)ns_nil_impl },
+    { "isMacCatalystApp", (void *)ns_false_impl },
+    { "isiOSAppOnMac", (void *)ns_false_impl },
+    { "isiOSAppOnVision", (void *)ns_false_impl },
+    { "isMacCatalystApp:", (void *)ns_false_impl },
+    { "URLsForDirectory:inDomains:", (void *)ns_nil_impl },
+    { "URLForDirectory:inDomain:appropriateForURL:create:error:", (void *)ns_nil_impl },
+    { "URLForDirectory:inDomain:appropriateForURL:create:", (void *)ns_nil_impl },
+    { "contentsOfDirectoryAtPath:error:", (void *)ns_nil_impl },
+    { "contentsAtPath:", (void *)ns_nil_impl },
+    { "createDirectoryAtPath:withIntermediateDirectories:attributes:error:", (void *)ns_false_impl },
+    { "createFileAtPath:contents:attributes:", (void *)ns_false_impl },
+    { "removeItemAtPath:error:", (void *)ns_false_impl },
+    { "fileExistsAtPath:", (void *)ns_false_impl },
+    { "objectForKey:", (void *)ns_nil_impl },
+    { "objectAtIndex:", (void *)ns_nil_impl },
+    { "firstObject", (void *)ns_nil_impl },
+    { "lastObject", (void *)ns_nil_impl },
+    { "allKeys", (void *)ns_nil_impl },
+    { "allValues", (void *)ns_nil_impl },
+    { "componentsSeparatedByString:", (void *)ns_nil_impl },
+    { "stringByAppendingPathComponent:", (void *)ns_nil_impl },
+    { "stringByAppendingString:", (void *)ns_nil_impl },
+    { "pathExtension", (void *)ns_nil_impl },
+    { "lastPathComponent", (void *)ns_nil_impl },
+    { "deletingPathExtension", (void *)ns_nil_impl },
+    { "path", (void *)ns_nil_impl },
+    { "init", (void *)ns_self },
     { NULL, NULL }
 };
+
+void chm_foundation_register_selectors(void);
 
 void chm_foundation_init(chm_session *s)
 {
     int i;
+    int k;
 
     g_session = s;
     g_log_len = 0;
@@ -301,8 +393,18 @@ void chm_foundation_init(chm_session *s)
         if (b)
             g_builtins[g_builtin_count++] = b;
     }
+    for (k = 0; g_methods[k].sel; k++) {
+        chm_method_reg m;
+
+        m.cls = NULL;
+        snprintf(m.sel, sizeof(m.sel), "%s", g_methods[k].sel);
+        m.imp = g_methods[k].imp;
+        if (chm_objc_session_add_method(s, &m) != 0)
+            break;
+    }
     if (s)
-        chm_session_log(s, "foundation: %d built-in classes registered", g_builtin_count);
+        chm_session_log(s, "foundation: %d classes, %d selectors registered",
+                        g_builtin_count, k);
 }
 
 void chm_foundation_shutdown(void)

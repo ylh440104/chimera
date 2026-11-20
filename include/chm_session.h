@@ -40,6 +40,14 @@ typedef struct {
     int32_t image_index;
 } chm_objc_cls_entry;
 
+#define CHM_MAX_METHOD_REGS 512
+
+typedef struct {
+    const char *cls;
+    char sel[96];
+    void *imp;
+} chm_method_reg;
+
 typedef struct chm_session {
     chm_image images[CHM_MAX_IMAGES];
     char image_paths[CHM_MAX_IMAGES][512];
@@ -55,6 +63,9 @@ typedef struct chm_session {
 
     chm_objc_cls_entry *classes;
     int class_count;
+
+    chm_method_reg *methods;
+    int method_count;
 
     char **sels;
     int sel_count;
@@ -84,6 +95,7 @@ void *chm_objc_msgSend_bridge(void);
 void *chm_objc_msgSendSuper2_bridge(void);
 void *chm_objc_resolve_imp(void *self, const char *sel);
 void *chm_objc_resolve_super2_imp(void *super_ptr, const char *sel);
+void chm_objc_dump_trace(chm_session *s);
 
 void chm_dispatch_init(void);
 void *chm_dispatch_lookup(const char *name);
@@ -97,6 +109,7 @@ void *chm_foundation_lookup_class(const char *name);
 void *chm_foundation_lookup_metaclass(const char *name);
 void *chm_foundation_lookup_method(const char *cls_name, const char *sel);
 void chm_foundation_note_missing_selector(const char *cls_name, const char *sel);
+int chm_objc_session_add_method(chm_session *s, const chm_method_reg *m);
 
 void *chm_frameworks_lookup(const char *name);
 int chm_frameworks_count(void);

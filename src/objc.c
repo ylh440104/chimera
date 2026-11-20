@@ -116,23 +116,107 @@ static void *method_imp_in_list(chm_method_list *ml, const char *sel)
     return NULL;
 }
 
+#define CHM_TRACE_RING 48
+
+typedef struct {
+    char cls[64];
+    char sel[64];
+    void *imp;
+} chm_trace_entry;
+
+static chm_trace_entry g_trace[CHM_TRACE_RING];
+static unsigned g_trace_pos;
+static unsigned g_trace_total;
+
+static void trace_msg(const char *cls, const char *sel, void *imp)
+{
+    chm_trace_entry *e = &g_trace[g_trace_pos % CHM_TRACE_RING];
+
+    snprintf(e->cls, sizeof(e->cls), "%s", cls ? cls : "?");
+    snprintf(e->sel, sizeof(e->sel), "%s", sel ? sel : "?");
+    e->imp = imp;
+    g_trace_pos++;
+    g_trace_total++;
+}
+
+static const char *class_name_of(chm_objc_class *c)
+{
+    chm_class_ro *ro = ro_of(c);
+
+    return ro && ro->name ? ro->name : "?";
+}
+
+void chm_objc_dump_trace(chm_session *s)
+{
+    unsigned start;
+    unsigned i;
+
+    if (!s)
+        return;
+    chm_session_log(s, "msg trace (last %u of %u):", g_trace_total < CHM_TRACE_RING ? g_trace_total : CHM_TRACE_RING, g_trace_total);
+    start = g_trace_total > CHM_TRACE_RING ? g_trace_total - CHM_TRACE_RING : 0;
+    for (i = start; i < g_trace_total; i++) {
+        chm_trace_entry *e = &g_trace[i % CHM_TRACE_RING];
+
+        chm_session_log(s, "  [%s %s] -> %p", e->cls, e->sel, e->imp);
+    }
+}
+
+int chm_objc_session_add_method(chm_session *s, const chm_method_reg *m)
+{
+    if (!s || !m || !m->sel[0])
+        return -1;
+    if (s->method_count >= CHM_MAX_METHOD_REGS)
+        return -1;
+    s->methods[s->method_count++] = *m;
+    return 0;
+}
+
+static void *lookup_registered(chm_session *s, const char *sel)
+{
+    int i;
+
+    if (!s || !sel)
+        return NULL;
+    for (i = 0; i < s->method_count; i++) {
+        if (strcmp(s->methods[i].sel, sel) == 0)
+            return s->methods[i].imp;
+    }
+    return NULL;
+}
+
 void *chm_objc_resolve_imp(void *self, const char *sel)
 {
     chm_objc_class *c;
     int depth = 0;
+    void *fallback;
+    const char *origin;
 
     if (!self || !sel)
         return NULL;
+    origin = class_name_of((chm_objc_class *)(*(void **)self));
     c = (chm_objc_class *)(*(void **)self);
+    if (!c) {
+        trace_msg("nil-isa", sel, NULL);
+        return NULL;
+    }
     while (c && depth < 64) {
         void *imp = method_imp_in_list(class_methods(c), sel);
 
-        if (imp)
+        if (imp) {
+            trace_msg(origin, sel, imp);
             return imp;
+        }
         c = (chm_objc_class *)c->superclass;
         depth++;
     }
-    return chm_foundation_lookup_method(NULL, sel);
+    fallback = lookup_registered(g_active_session, sel);
+    if (!fallback)
+        fallback = chm_foundation_lookup_method(NULL, sel);
+    trace_msg(origin, sel, fallback);
+    if (!fallback && g_active_session)
+        chm_session_log(g_active_session, "selector miss: -[%s %s]", origin, sel);
+    return fallback;
 }
 
 void *chm_objc_resolve_super2_imp(void *super_ptr, const char *sel)
@@ -164,6 +248,25 @@ void chm_objc_session_init(chm_session *s)
     s->sel_count = 0;
 }
 
+static bool in_image(chm_image *img, uint64_t addr, uint64_t size)
+{
+    uint32_t i;
+
+    if (!addr || addr + size < addr)
+        return false;
+    for (i = 0; i < img->nsegs; i++) {
+        chm_segment *seg = &img->segs[i];
+
+        if (!seg->vmsize || !strcmp(seg->name, "__PAGEZERO"))
+            continue;
+        uint64_t start = seg->vmaddr + img->slide;
+
+        if (addr >= start && addr + size <= start + seg->vmsize)
+            return true;
+    }
+    return false;
+}
+
 void chm_objc_session_scan(chm_session *s, int img_idx)
 {
     chm_image *img = &s->images[img_idx];
@@ -185,13 +288,17 @@ void chm_objc_session_scan(chm_session *s, int img_idx)
             slots = (uint64_t *)(uintptr_t)(sec->addr + img->slide);
             count = sec->size / 8;
             for (j = 0; j < count; j++) {
-                chm_objc_class *c = (chm_objc_class *)(uintptr_t)slots[j];
+                uint64_t raw = slots[j];
+                chm_objc_class *c;
                 const char *name;
 
-                if (!c)
+                if (!raw || !in_image(img, raw, sizeof(chm_objc_class)))
                     continue;
+                c = (chm_objc_class *)(uintptr_t)raw;
                 name = class_name(c);
-                if (!name || s->class_count >= CHM_MAX_CLASSES)
+                if (!name || !in_image(img, (uint64_t)(uintptr_t)name, 1))
+                    continue;
+                if (s->class_count >= CHM_MAX_CLASSES)
                     continue;
                 chm_objc_cls_entry *e = &s->classes[s->class_count++];
                 snprintf(e->name, sizeof(e->name), "%s", name);
