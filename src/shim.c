@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <setjmp.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,6 +17,9 @@
 #define CHM_MISSING_MAX 64
 #define CHM_MISSING_NAME 128
 #define CHM_ALTSTACK_SIZE 32768
+#define CHM_TLV_MAX 128
+#define CHM_TLV_SIZE 64
+#define CHM_DARWIN_MAP_ANON 0x1000
 #define CHM_LC_ENCRYPTION_INFO 0x21u
 #define CHM_LC_ENCRYPTION_INFO_64 0x2cu
 
@@ -25,7 +29,23 @@ static char g_last_missing[CHM_MISSING_NAME];
 static char g_fault[256];
 static sigjmp_buf g_jump;
 static volatile sig_atomic_t g_armed;
+extern char **environ;
 static char g_altstack[CHM_ALTSTACK_SIZE];
+
+static uintptr_t g_stack_chk_guard = 0x9e3779b97f4a7c15ull;
+static unsigned int g_task_self = 0x203u;
+static FILE *g_stdoutp;
+static FILE *g_stdderp;
+static char **g_environ;
+static char g_block_isa[64];
+
+typedef struct {
+    void *key;
+    void *mem;
+} chm_tlv_entry;
+
+static chm_tlv_entry g_tlv[CHM_TLV_MAX];
+static int g_tlv_count;
 
 static ssize_t sh_write(int fd, const void *buf, size_t n)
 {
@@ -55,6 +75,61 @@ static uint64_t sh_absolute_time(void)
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
+static void *sh_mmap(void *addr, size_t len, int prot, int flags, int fd, long off)
+{
+    int linux_flags = flags & ~CHM_DARWIN_MAP_ANON;
+
+    if (flags & CHM_DARWIN_MAP_ANON)
+        linux_flags |= MAP_ANONYMOUS;
+    return mmap(addr, len, prot, linux_flags, fd, (off_t)off);
+}
+
+static int sh_mprotect(void *addr, size_t len, int prot)
+{
+    return mprotect(addr, len, prot);
+}
+
+static int sh_munmap(void *addr, size_t len)
+{
+    return munmap(addr, len);
+}
+
+static int sh_fcntl(int fd, int cmd, ...)
+{
+    va_list ap;
+    long arg;
+    int rc;
+
+    va_start(ap, cmd);
+    arg = va_arg(ap, long);
+    va_end(ap);
+    rc = fcntl(fd, cmd, arg);
+    return rc;
+}
+
+static void *sh_tlv_bootstrap(void *desc)
+{
+    void *key;
+    int i;
+
+    key = ((void **)desc)[1];
+    for (i = 0; i < g_tlv_count; i++) {
+        if (g_tlv[i].key == key)
+            return g_tlv[i].mem;
+    }
+    if (g_tlv_count < CHM_TLV_MAX) {
+        void *mem = calloc(1, CHM_TLV_SIZE);
+
+        if (!mem)
+            return NULL;
+        g_tlv[g_tlv_count].key = key;
+        g_tlv[g_tlv_count].mem = mem;
+        g_tlv_count++;
+        return mem;
+    }
+    return NULL;
+}
+
 static void sh_trap_missing(void);
 
 typedef struct {
@@ -82,8 +157,18 @@ static const chm_shim_entry chm_shims[] = {
     { "_abort", (void *)abort },
     { "_exit", (void *)exit },
     { "_getenv", (void *)getenv },
+    { "_mmap", (void *)sh_mmap },
+    { "_mprotect", (void *)sh_mprotect },
+    { "_munmap", (void *)sh_munmap },
+    { "_fcntl", (void *)sh_fcntl },
+    { "__tlv_bootstrap", (void *)sh_tlv_bootstrap },
     { NULL, NULL }
 };
+
+typedef struct {
+    const char *name;
+    void *addr;
+} chm_data_entry;
 
 static void note_missing(const char *name)
 {
@@ -113,9 +198,29 @@ const char *chm_missing_at(int index)
     return g_missing[index];
 }
 
+static void data_init(void)
+{
+    if (!g_stdoutp) {
+        g_stdoutp = stdout;
+        g_stdderp = stderr;
+        g_environ = environ;
+    }
+}
+
 void *chm_resolve_import(const char *name)
 {
     const chm_shim_entry *e;
+    static const chm_data_entry data[] = {
+        { "_mach_task_self_", (void *)&g_task_self },
+        { "__stack_chk_guard", (void *)&g_stack_chk_guard },
+        { "__stdoutp", (void *)&g_stdoutp },
+        { "__stdderp", (void *)&g_stdderp },
+        { "_environ", (void *)&g_environ },
+        { "_NSConcreteStackBlock", (void *)g_block_isa },
+        { "_NSConcreteGlobalBlock", (void *)g_block_isa },
+        { NULL, NULL }
+    };
+    int i;
 
     for (e = chm_shims; e->name; e++) {
         const char *a = e->name;
@@ -128,6 +233,13 @@ void *chm_resolve_import(const char *name)
         if (strcmp(e->name, name) == 0)
             return e->addr;
     }
+
+    data_init();
+    for (i = 0; data[i].name; i++) {
+        if (strcmp(data[i].name, name) == 0)
+            return data[i].addr;
+    }
+
     snprintf(g_last_missing, sizeof(g_last_missing), "%s", name ? name : "?");
     note_missing(g_last_missing);
     return (void *)sh_trap_missing;
@@ -226,6 +338,7 @@ int chm_is_encrypted(const char *path)
             break;
         if (lc->cmd == CHM_LC_ENCRYPTION_INFO_64 || lc->cmd == CHM_LC_ENCRYPTION_INFO) {
             const uint32_t *v = (const uint32_t *)p;
+
             cryptid = (int)v[4];
             break;
         }
