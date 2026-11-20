@@ -9,11 +9,19 @@
 
 #define TAG "chimera"
 
+extern int chm_fixup_at(chm_image *img, uint64_t slide);
+extern int chm_call_guarded(void (*fn)(void *), void *arg, char *err, size_t cap);
+
 static chm_report g_report;
 
 static void log_text(const char *text)
 {
     __android_log_write(ANDROID_LOG_INFO, TAG, text);
+}
+
+static void pump_blocks(void *arg)
+{
+    chm_dispatch_pump((chm_report *)arg);
 }
 
 JNIEXPORT jstring JNICALL Java_dev_chimera_app_Native_run(JNIEnv *env, jclass cls, jstring path)
@@ -23,6 +31,7 @@ JNIEXPORT jstring JNICALL Java_dev_chimera_app_Native_run(JNIEnv *env, jclass cl
     char err[256];
     int rc;
     int cryptid;
+    int deps;
 
     (void)cls;
     memset(&g_report, 0, sizeof(g_report));
@@ -53,7 +62,9 @@ JNIEXPORT jstring JNICALL Java_dev_chimera_app_Native_run(JNIEnv *env, jclass cl
                    img.nsegs, img.ndylibs, img.nsyms,
                    (unsigned long long)img.entryoff);
 
-    chm_fw_load(&img, &g_report);
+    deps = chm_fw_load(&img, &g_report);
+    chm_dylib_load_all(&img, p, &g_report);
+    chm_report_add(&g_report, "依赖未满足 %d", deps);
 
     if (chm_fixup(&img) != 0) {
         chm_report_line(&g_report, "映射或绑定失败");
@@ -71,7 +82,12 @@ JNIEXPORT jstring JNICALL Java_dev_chimera_app_Native_run(JNIEnv *env, jclass cl
     else
         chm_report_add(&g_report, "入口返回 %d", rc);
 
-    chm_report_add(&g_report, "dispatch: 待执行 block %d", chm_dispatch_pending());
+    if (chm_dispatch_pending() > 0) {
+        int prc = chm_call_guarded(pump_blocks, &g_report, err, sizeof(err));
+
+        if (prc == -2)
+            chm_report_add(&g_report, "dispatch 中断: %s", err);
+    }
 
     if (chm_missing_count() > 0) {
         char line[300];

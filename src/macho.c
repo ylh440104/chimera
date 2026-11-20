@@ -283,6 +283,8 @@ int chm_map(chm_image *img, uint64_t slide)
             continue;
         if (strcmp(s->name, "__PAGEZERO") == 0)
             continue;
+        if (s->mapped)
+            continue;
         if (s->filesize > s->vmsize)
             return -1;
         if (s->fileoff + s->filesize > img->filesize)
@@ -390,7 +392,6 @@ static uint64_t chm_bind_value(chm_image *img, uint32_t index, uint32_t count,
     name = symbols + imports[index].name_offset;
     sym = chm_resolve_import(name);
     if (!sym) {
-        fprintf(stderr, "chimera: missing import %s\n", name);
         img->nfixup_missing++;
         return 0;
     }
@@ -549,7 +550,6 @@ static int chm_apply_bind(chm_image *img, uint32_t off, uint32_t size)
                 skip = chm_uleb(&p, end);
             }
             if (!target) {
-                fprintf(stderr, "chimera: missing import %s\n", sym ? sym : "?");
                 img->nfixup_missing++;
                 break;
             }
@@ -571,9 +571,9 @@ static int chm_apply_bind(chm_image *img, uint32_t off, uint32_t size)
     return 0;
 }
 
-int chm_fixup(chm_image *img)
+int chm_fixup_at(chm_image *img, uint64_t slide)
 {
-    if (chm_map_default(img) != 0)
+    if (chm_map(img, slide) != 0)
         return -1;
     if (chm_apply_chained(img) != 0)
         return -1;
@@ -584,6 +584,11 @@ int chm_fixup(chm_image *img)
     if (chm_protect(img) != 0)
         return -1;
     return 0;
+}
+
+int chm_fixup(chm_image *img)
+{
+    return chm_fixup_at(img, 0);
 }
 
 void chm_dump(chm_image *img, FILE *out)
@@ -624,4 +629,6 @@ void chm_dump(chm_image *img, FILE *out)
     fprintf(out, "symbols     %u\n", img->nsyms);
     fprintf(out, "chained     %s\n", img->chained ? "yes" : "no");
     fprintf(out, "dyld_info   %s\n", img->dyld_info ? "yes" : "no");
+    fprintf(out, "binds       %u\n", img->nfixup_bind);
+    fprintf(out, "missing     %u\n", img->nfixup_missing);
 }

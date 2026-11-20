@@ -33,6 +33,10 @@ void chm_dispatch_pump(chm_report *r);
 
 int chm_fw_load(chm_image *img, chm_report *r);
 
+int chm_dylib_load_all(chm_image *main_img, const char *exe_path, chm_report *r);
+void *chm_dylib_lookup(const char *name);
+int chm_dylib_export_count(void);
+
 int chm_ui_main(chm_image *img, int argc, char **argv, chm_report *r);
 
 #endif

@@ -201,10 +201,11 @@ static void data_init(void)
     }
 }
 
-void *chm_resolve_import(const char *name)
+static void *locate_import(const char *name)
 {
     const chm_shim_entry *e;
     void *resolved;
+    int i;
     static const struct {
         const char *name;
         void *addr;
@@ -216,7 +217,6 @@ void *chm_resolve_import(const char *name)
         { "_environ", (void *)&g_environ },
         { NULL, NULL }
     };
-    int i;
 
     for (e = chm_shims; e->name; e++) {
         const char *a = e->name;
@@ -230,6 +230,9 @@ void *chm_resolve_import(const char *name)
             return e->addr;
     }
 
+    resolved = chm_dylib_lookup(name);
+    if (resolved)
+        return resolved;
     resolved = chm_objc_resolve_import(name);
     if (resolved)
         return resolved;
@@ -242,7 +245,15 @@ void *chm_resolve_import(const char *name)
         if (strcmp(data[i].name, name) == 0)
             return data[i].addr;
     }
+    return NULL;
+}
 
+void *chm_resolve_import(const char *name)
+{
+    void *resolved = locate_import(name);
+
+    if (resolved)
+        return resolved;
     snprintf(g_last_missing, sizeof(g_last_missing), "%s", name ? name : "?");
     note_missing(g_last_missing);
     return (void *)sh_trap_missing;
@@ -297,6 +308,19 @@ int chm_run_guarded(chm_image *img, int argc, char **argv, char *err, size_t cap
         rc = chm_run(img, argc, argv);
         g_armed = 0;
         return rc;
+    }
+    if (err && cap)
+        snprintf(err, cap, "%s", g_fault);
+    return -2;
+}
+
+int chm_call_guarded(void (*fn)(void *), void *arg, char *err, size_t cap)
+{
+    g_armed = 1;
+    if (sigsetjmp(g_jump, 1) == 0) {
+        fn(arg);
+        g_armed = 0;
+        return 0;
     }
     if (err && cap)
         snprintf(err, cap, "%s", g_fault);
