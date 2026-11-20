@@ -1,0 +1,7 @@
+build/
+*.o
+*.a
+.gradle/
+local.properties
+android/app/.cxx/
+android/.kotlin/
