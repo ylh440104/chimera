@@ -49,6 +49,16 @@ jobs:
           ls -1 /System/Library/AssetsV2 2>&1 | head -20
           echo "--- all RuntimeRoot under AssetsV2"
           find /System/Library/AssetsV2 -maxdepth 10 -name RuntimeRoot -type d 2>/dev/null | head -10
+          echo "--- simctl runtimes"
+          xcrun simctl list runtimes 2>&1 | head -20
+          echo "--- simctl runtime list"
+          xcrun simctl runtime list -v 2>&1 | head -30
+          echo "--- mounts"
+          mount | grep -i -E 'coresimulator|runtime|cryptex' | head -10
+          echo "--- volume ls -la"
+          ls -la /Library/Developer/CoreSimulator/Volumes/iOS_23C54 2>&1 | head -10
+          echo "--- cryptex images"
+          ls -la /Library/Developer/CoreSimulator/Cryptex/Images 2>&1 | head -10
           echo "--- volumes detail"
           for v in /Library/Developer/CoreSimulator/Volumes/*; do
             echo "VOL $v"
