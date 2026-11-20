@@ -3,7 +3,6 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -20,6 +19,11 @@ static ssize_t sh_read(int fd, void *buf, size_t n)
 static int *sh_error(void)
 {
     return &errno;
+}
+
+static void sh_bzero(void *p, size_t n)
+{
+    memset(p, 0, n);
 }
 
 static uint64_t sh_absolute_time(void)
@@ -48,7 +52,7 @@ static const chm_shim_entry chm_shims[] = {
     { "_memcpy", (void *)memcpy },
     { "_memmove", (void *)memmove },
     { "_memset", (void *)memset },
-    { "_bzero", (void *)bzero },
+    { "_bzero", (void *)sh_bzero },
     { "_strlen", (void *)strlen },
     { "_strcmp", (void *)strcmp },
     { "_strcpy", (void *)strcpy },

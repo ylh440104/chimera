@@ -1,6 +1,7 @@
 #include <jni.h>
 #include <android/log.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "chm.h"
 
