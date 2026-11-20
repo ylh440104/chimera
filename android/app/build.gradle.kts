@@ -6,6 +6,7 @@ plugins {
 android {
     namespace = "dev.chimera.app"
     compileSdk = 34
+    ndkVersion = "26.1.10909125"
 
     defaultConfig {
         applicationId = "dev.chimera.app"
