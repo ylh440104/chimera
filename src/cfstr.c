@@ -25,6 +25,10 @@ typedef struct {
 static chm_const_entry g_consts[CHM_CFSTR_MAX];
 static int g_const_count;
 static char g_cfstr_class[64];
+static char g_empty_cache[64];
+static char g_os_activity_current[64];
+static char g_nsarray0[128];
+static char g_ehtype_nsexception[64];
 
 int chm_cfstr_owns(void *p)
 {
@@ -81,6 +85,10 @@ int chm_cfstr_is_const_name(const char *name)
     if (strncmp(name, "_UI", 3) == 0)
         return 1;
     if (strncmp(name, "_CF", 3) == 0)
+        return 1;
+    if (strncmp(name, "_GC", 3) == 0)
+        return 1;
+    if (strncmp(name, "_AV", 3) == 0)
         return 1;
     if (strncmp(name, "_CG", 3) == 0)
         return 1;
@@ -265,6 +273,14 @@ void *chm_cfstr_resolve(const char *name)
         if (strcmp(table[i].name, name) == 0)
             return table[i].addr;
     }
+    if (strcmp(name, "__objc_empty_cache") == 0)
+        return g_empty_cache;
+    if (strcmp(name, "__os_activity_current") == 0)
+        return g_os_activity_current;
+    if (strcmp(name, "___NSArray0__") == 0)
+        return g_nsarray0;
+    if (strcmp(name, "_OBJC_EHTYPE_$_NSException") == 0)
+        return g_ehtype_nsexception;
     if (strcmp(name, "___CFConstantStringClassReference") == 0)
         return g_cfstr_class;
     return NULL;
