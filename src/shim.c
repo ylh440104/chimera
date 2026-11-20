@@ -382,3 +382,11 @@ int chm_is_encrypted(const char *path)
     munmap((void *)base, (size_t)st.st_size);
     return cryptid;
 }
+void chm_trap_unimplemented(const char *what)
+{
+    if (!g_armed)
+        _exit(5);
+    snprintf(g_fault, sizeof(g_fault), "%s", what ? what : "unimplemented");
+    g_armed = 0;
+    siglongjmp(g_jump, 1);
+}

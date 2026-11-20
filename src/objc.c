@@ -1,3 +1,5 @@
+extern void *chm_objc_empty_class(const char *name);
+extern void *chm_objc_missing_method(void *self, const char *sel);
 extern void *chm_cfstr_builtin(void *self, const char *sel);
 #include "chm.h"
 #include "chm_int.h"
@@ -282,6 +284,8 @@ static void *chm_objc_msgSend(void *self, const char *sel, uint64_t a1, uint64_t
     void *resolved = chm_objc_lookup_imp(self, sel);
     if (!resolved)
         resolved = chm_cfstr_builtin(self, sel);
+    if (!resolved)
+        resolved = chm_objc_missing_method(self, sel);
     return chm_send6(resolved, self, sel, a1, a2, a3, a4, a5, a6);
 }
 
@@ -434,14 +438,14 @@ void *chm_objc_resolve_import(const char *name)
 
         if (cls)
             return cls;
-        return NULL;
+        return chm_objc_empty_class(name + 14);
     }
     if (strncmp(name, "_OBJC_METACLASS_$_", 18) == 0) {
         void *meta = chm_objc_getMetaClass(name + 18);
 
         if (meta)
             return meta;
-        return NULL;
+        return chm_objc_empty_class(name + 18);
     }
     return NULL;
 }
