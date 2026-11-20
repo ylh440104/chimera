@@ -1,4 +1,5 @@
 #include "chm.h"
+#include "chm_int.h"
 #include "chm_rt.h"
 
 #include <errno.h>
@@ -23,13 +24,14 @@
 #define CHM_LC_ENCRYPTION_INFO 0x21u
 #define CHM_LC_ENCRYPTION_INFO_64 0x2cu
 
+extern char **environ;
+
 static char g_missing[CHM_MISSING_MAX][CHM_MISSING_NAME];
 static int g_missing_count;
 static char g_last_missing[CHM_MISSING_NAME];
 static char g_fault[256];
 static sigjmp_buf g_jump;
 static volatile sig_atomic_t g_armed;
-extern char **environ;
 static char g_altstack[CHM_ALTSTACK_SIZE];
 
 static uintptr_t g_stack_chk_guard = 0x9e3779b97f4a7c15ull;
@@ -37,7 +39,6 @@ static unsigned int g_task_self = 0x203u;
 static FILE *g_stdoutp;
 static FILE *g_stdderp;
 static char **g_environ;
-static char g_block_isa[64];
 
 typedef struct {
     void *key;
@@ -98,13 +99,11 @@ static int sh_fcntl(int fd, int cmd, ...)
 {
     va_list ap;
     long arg;
-    int rc;
 
     va_start(ap, cmd);
     arg = va_arg(ap, long);
     va_end(ap);
-    rc = fcntl(fd, cmd, arg);
-    return rc;
+    return fcntl(fd, cmd, arg);
 }
 
 static void *sh_tlv_bootstrap(void *desc)
@@ -165,11 +164,6 @@ static const chm_shim_entry chm_shims[] = {
     { NULL, NULL }
 };
 
-typedef struct {
-    const char *name;
-    void *addr;
-} chm_data_entry;
-
 static void note_missing(const char *name)
 {
     int i;
@@ -210,14 +204,16 @@ static void data_init(void)
 void *chm_resolve_import(const char *name)
 {
     const chm_shim_entry *e;
-    static const chm_data_entry data[] = {
+    void *resolved;
+    static const struct {
+        const char *name;
+        void *addr;
+    } data[] = {
         { "_mach_task_self_", (void *)&g_task_self },
         { "___stack_chk_guard", (void *)&g_stack_chk_guard },
         { "___stdoutp", (void *)&g_stdoutp },
         { "___stderrp", (void *)&g_stdderp },
         { "_environ", (void *)&g_environ },
-        { "__NSConcreteStackBlock", (void *)g_block_isa },
-        { "__NSConcreteGlobalBlock", (void *)g_block_isa },
         { NULL, NULL }
     };
     int i;
@@ -233,6 +229,13 @@ void *chm_resolve_import(const char *name)
         if (strcmp(e->name, name) == 0)
             return e->addr;
     }
+
+    resolved = chm_objc_resolve_import(name);
+    if (resolved)
+        return resolved;
+    resolved = chm_dispatch_resolve_import(name);
+    if (resolved)
+        return resolved;
 
     data_init();
     for (i = 0; data[i].name; i++) {

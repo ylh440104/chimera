@@ -4,11 +4,11 @@ project(chimera C)
 
 set(ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../..)
 
+file(GLOB CHM_SOURCES ${ROOT}/src/*.c)
+
 add_library(chimera SHARED
         chimera_jni.c
-        ${ROOT}/src/macho.c
-        ${ROOT}/src/shim.c
-        ${ROOT}/src/loader.c)
+        ${CHM_SOURCES})
 
 target_include_directories(chimera PRIVATE ${ROOT}/include)
 

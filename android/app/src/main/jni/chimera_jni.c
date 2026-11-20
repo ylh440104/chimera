@@ -1,115 +1,98 @@
 #include <jni.h>
 #include <android/log.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "chm.h"
+#include "chm_int.h"
 #include "chm_rt.h"
 
 #define TAG "chimera"
-#define REPORT_MAX 2048
 
-static void log_line(const char *text)
+static chm_report g_report;
+
+static void log_text(const char *text)
 {
     __android_log_write(ANDROID_LOG_INFO, TAG, text);
-}
-
-static void append(char *buf, size_t cap, const char *text)
-{
-    size_t used = strlen(buf);
-    size_t room = cap > used ? cap - used : 0;
-
-    if (room > 1)
-        snprintf(buf + used, room, "%s", text);
 }
 
 JNIEXPORT jstring JNICALL Java_dev_chimera_app_Native_run(JNIEnv *env, jclass cls, jstring path)
 {
     const char *p;
     chm_image img;
-    char report[REPORT_MAX];
     char err[256];
     int rc;
     int cryptid;
-    int i;
 
     (void)cls;
-    report[0] = 0;
+    memset(&g_report, 0, sizeof(g_report));
     err[0] = 0;
 
     p = (*env)->GetStringUTFChars(env, path, NULL);
-    if (!p) {
-        log_line("no path");
+    if (!p)
         return (*env)->NewStringUTF(env, "no path");
-    }
-    log_line(p);
 
     chm_install_fault_handler();
 
     cryptid = chm_is_encrypted(p);
     if (cryptid < 0) {
-        append(report, sizeof(report), "不是可用的 Mach-O");
+        chm_report_line(&g_report, "不是可用的 Mach-O");
         goto done;
     }
     if (cryptid == 1) {
-        append(report, sizeof(report), "二进制是 FairPlay 加密的，需要先解密");
+        chm_report_line(&g_report, "FairPlay 加密，需要先解密");
         goto done;
     }
 
     memset(&img, 0, sizeof(img));
     if (chm_open(&img, p) != 0) {
-        append(report, sizeof(report), "Mach-O 解析失败");
+        chm_report_line(&g_report, "Mach-O 解析失败");
         goto done;
     }
+    chm_report_add(&g_report, "镜像: 段 %u, dylib %u, 符号 %u, 入口 0x%llx",
+                   img.nsegs, img.ndylibs, img.nsyms,
+                   (unsigned long long)img.entryoff);
 
-    {
-        char line[256];
-
-        snprintf(line, sizeof(line), "段 %u，dylib %u，符号 %u",
-                 img.nsegs, img.ndylibs, img.nsyms);
-        append(report, sizeof(report), line);
-        append(report, sizeof(report), "\n");
-    }
+    chm_fw_load(&img, &g_report);
 
     if (chm_fixup(&img) != 0) {
-        append(report, sizeof(report), "映射或绑定失败");
+        chm_report_line(&g_report, "映射或绑定失败");
         chm_close(&img);
         goto done;
     }
-    append(report, sizeof(report), "镜像已映射并完成绑定\n");
+    chm_report_line(&g_report, "已映射并绑定");
+
+    chm_objc_scan(&img, &g_report);
+    chm_dispatch_init();
 
     rc = chm_run_guarded(&img, 0, NULL, err, sizeof(err));
-    {
-        char line[512];
+    if (rc == -2)
+        chm_report_add(&g_report, "执行中断: %s", err);
+    else
+        chm_report_add(&g_report, "入口返回 %d", rc);
 
-        if (rc == -2)
-            snprintf(line, sizeof(line), "执行中断：%s\n", err);
-        else
-            snprintf(line, sizeof(line), "入口返回 %d\n", rc);
-        append(report, sizeof(report), line);
-    }
+    chm_report_add(&g_report, "dispatch: 待执行 block %d", chm_dispatch_pending());
 
     if (chm_missing_count() > 0) {
-        char line[256];
+        char line[300];
+        int i;
+        int shown = chm_missing_count() < 10 ? chm_missing_count() : 10;
 
-        snprintf(line, sizeof(line), "缺 %d 个符号：", chm_missing_count());
-        append(report, sizeof(report), line);
-        for (i = 0; i < chm_missing_count() && i < 8; i++) {
-            append(report, sizeof(report), " ");
-            append(report, sizeof(report), chm_missing_at(i));
+        snprintf(line, sizeof(line), "缺 %d 个符号:", chm_missing_count());
+        for (i = 0; i < shown; i++) {
+            size_t used = strlen(line);
+
+            snprintf(line + used, sizeof(line) - used, " %s", chm_missing_at(i));
         }
-        if (chm_missing_count() > 8)
-            append(report, sizeof(report), " ...");
-        append(report, sizeof(report), "\n");
+        chm_report_line(&g_report, line);
     } else {
-        append(report, sizeof(report), "没有缺失符号\n");
+        chm_report_line(&g_report, "没有缺失符号");
     }
 
     chm_close(&img);
 
 done:
     (*env)->ReleaseStringUTFChars(env, path, p);
-    log_line(report);
-    return (*env)->NewStringUTF(env, report);
+    log_text(g_report.text);
+    return (*env)->NewStringUTF(env, g_report.text);
 }
