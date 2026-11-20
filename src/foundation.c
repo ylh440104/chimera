@@ -596,17 +596,72 @@ static void *s_with_utf8(void *cls, const char *bytes)
     return fo_string_new(bytes);
 }
 
-static void *s_with_format(void *cls, const char *fmt, ...)
+static void *s_with_format(void *cls, void *fmt_obj, ...)
 {
-    char buf[1024];
+    const char *fmt = fo_bytes(fmt_obj);
+    char buf[2048];
+    size_t used = 0;
     va_list ap;
 
     (void)cls;
-    if (!fmt)
-        return fo_string_new("");
-    va_start(ap, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_start(ap, fmt_obj);
+    while (*fmt && used + 2 < sizeof(buf)) {
+        if (*fmt != '%') {
+            buf[used++] = *fmt++;
+            continue;
+        }
+        fmt++;
+        if (*fmt == '@') {
+            const char *desc = o_description(va_arg(ap, void *));
+            size_t dl = strlen(desc);
+
+            if (dl > sizeof(buf) - used - 1)
+                dl = sizeof(buf) - used - 1;
+            memcpy(buf + used, desc, dl);
+            used += dl;
+            fmt++;
+            continue;
+        }
+        if (*fmt == 's') {
+            const char *s = va_arg(ap, const char *);
+            size_t sl = s ? strlen(s) : 0;
+
+            if (!s)
+                s = "(null)";
+            if (sl > sizeof(buf) - used - 1)
+                sl = sizeof(buf) - used - 1;
+            memcpy(buf + used, s, sl);
+            used += sl;
+            fmt++;
+            continue;
+        }
+        if (*fmt == 'd' || *fmt == 'i') {
+            int v = va_arg(ap, int);
+            int n = snprintf(buf + used, sizeof(buf) - used, "%d", v);
+
+            if (n > 0)
+                used += (size_t)n;
+            fmt++;
+            continue;
+        }
+        if (*fmt == 'l' && fmt[1] == 'd') {
+            long v = va_arg(ap, long);
+            int n = snprintf(buf + used, sizeof(buf) - used, "%ld", v);
+
+            if (n > 0)
+                used += (size_t)n;
+            fmt += 2;
+            continue;
+        }
+        if (*fmt == '%') {
+            buf[used++] = '%';
+            fmt++;
+            continue;
+        }
+        buf[used++] = '%';
+    }
     va_end(ap);
+    buf[used] = 0;
     return fo_string_new(buf);
 }
 
