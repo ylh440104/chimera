@@ -364,6 +364,26 @@ static int dladdr_impl(const void *addr, void *info)
     return 0;
 }
 
+static char *strncpy_chk_impl(char *d, const char *s, size_t n, size_t cap)
+{
+    (void)cap;
+    if (!d)
+        return d;
+    if (!s) {
+        if (n)
+            d[0] = 0;
+        return d;
+    }
+    return strncpy(d, s, n);
+}
+
+static char *safe_strdup(const char *s)
+{
+    if (!s)
+        return NULL;
+    return strdup(s);
+}
+
 static size_t safe_strlen(const char *s)
 {
     return s ? strlen(s) : 0;
@@ -458,13 +478,17 @@ static const chm_entry g_entries[] = {
     FN("_memset_chk", memset_chk_impl, "libc.mem"),
     FN("_strcpy_chk", strcpy_chk_impl, "libc.str"),
     FN("_strcat_chk", strcat_chk_impl, "libc.str"),
+    FN("___strcpy_chk", strcpy_chk_impl, "libc.str"),
+    FN("___strcat_chk", strcat_chk_impl, "libc.str"),
+    FN("___strlen_chk", safe_strlen, "libc.str"),
+    FN("___strncpy_chk", strncpy_chk_impl, "libc.str"),
     FN("_bzero", bzero_impl, "libc.mem"),
     FN("_strcmp", safe_strcmp, "libc.str"),
     FN("_strncmp", safe_strncmp, "libc.str"),
     FN("_strlen", safe_strlen, "libc.str"),
     FN("_strstr", safe_strstr, "libc.str"),
     FN("_strcpy", safe_strcpy, "libc.str"),
-    FN("_strdup", strdup, "libc.str"),
+    FN("_strdup", safe_strdup, "libc.str"),
     FN("_strerror", strerror_impl, "libc.str"),
     FN("_basename", safe_basename, "libc.str"),
     FN("_dirname", safe_dirname, "libc.str"),

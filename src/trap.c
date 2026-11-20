@@ -86,6 +86,38 @@ static void run_body(void *p)
     a->rc = chm_run(a->img, a->argc, a->argv);
 }
 
+static void scan_stack(chm_session *s, uint64_t sp)
+{
+    const uint64_t *p;
+    uint64_t limit;
+    int shown = 0;
+    int i;
+
+    if (!s || !sp)
+        return;
+    p = (const uint64_t *)(uintptr_t)sp;
+    limit = sp + 8192;
+    for (; (uint64_t)(uintptr_t)p < limit && shown < 16; p++) {
+        uint64_t v = *p;
+
+        if (!v)
+            continue;
+        for (i = 0; i < s->image_count; i++) {
+            uint64_t lo = s->images[i].vm_min + s->images[i].slide;
+            uint64_t hi = s->images[i].vm_max + s->images[i].slide;
+
+            if (v >= lo && v < hi) {
+                shown++;
+                chm_session_log(s, "stack[%d] image[%d]+0x%llx",
+                                shown, i, (unsigned long long)(v - lo));
+                break;
+            }
+        }
+    }
+    if (!shown)
+        chm_session_log(s, "stack scan: no image pointers found near sp");
+}
+
 static void describe_pc(chm_session *s, uint64_t pc)
 {
     int i;
@@ -181,6 +213,7 @@ int chm_session_execute(chm_session *s, chm_image *img, int argc, char **argv)
     }
     chm_session_log(s, "%s", g_fault);
     describe_pc(s, g_pc);
+    scan_stack(s, g_sp);
     chm_objc_dump_trace(s);
     return -2;
 }

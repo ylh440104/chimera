@@ -21,80 +21,86 @@ jobs:
           - macos-14-xlarge
           - macos-15-xlarge
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
-      - name: collect
+      - name: host
         if: always()
         run: |
+          set +e
           L=probe-${{ matrix.os }}.log
           : > $L
           {
-            echo "runner=${{ matrix.os }}"
-            uname -m
-            sw_vers
-            xcodebuild -version 2>/dev/null
-            echo "--- roots"
-            ls -1 /Library/Developer/CoreSimulator 2>/dev/null
-            echo "--- profiles"
-            ls -1 /Library/Developer/CoreSimulator/Profiles/Runtimes 2>/dev/null
-            echo "--- volumes"
-            ls -1 /Library/Developer/CoreSimulator/Volumes 2>/dev/null
-            echo "--- sdk"
-            ls -1 /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs 2>/dev/null
+          echo "runner=${{ matrix.os }}"
+          uname -m
+          sw_vers
+          xcodebuild -version
+          echo "--- coresim"
+          ls -1 /Library/Developer/CoreSimulator
+          echo "--- profiles"
+          ls -1 /Library/Developer/CoreSimulator/Profiles/Runtimes
+          echo "--- volumes"
+          ls -1 /Library/Developer/CoreSimulator/Volumes
+          echo "--- sdk"
+          ls -1 /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs
+          echo "--- sdkpath"
+          xcrun --sdk iphonesimulator --show-sdk-path
+          echo "--- runtime roots"
+          find /Library/Developer/CoreSimulator -maxdepth 8 -name RuntimeRoot -type d
           } >> $L 2>&1
+          exit 0
 
-      - name: framework scan
+      - name: frameworks
         if: always()
         run: |
+          set +e
           L=probe-${{ matrix.os }}.log
           ROOT=""
-          for c in \
-            $(ls -d /Library/Developer/CoreSimulator/Volumes/*/Library/Developer/CoreSimulator/Profiles/Runtimes/*/Contents/Resources/RuntimeRoot 2>/dev/null) \
-            $(ls -d /Library/Developer/CoreSimulator/Profiles/Runtimes/*/Contents/Resources/RuntimeRoot 2>/dev/null)
-          do
+          for c in $(find /Library/Developer/CoreSimulator -maxdepth 8 -name RuntimeRoot -type d 2>/dev/null); do
             if [ -f "$c/System/Library/Frameworks/UIKit.framework/UIKit" ]; then ROOT="$c"; break; fi
           done
           if [ -z "$ROOT" ]; then echo "NO_RUNTIME_ROOT" >> $L; exit 0; fi
           echo "ROOT=$ROOT" >> $L
-          for fw in UIKit Foundation CoreFoundation CoreGraphics QuartzCore Security CoreText; do
+          for fw in UIKit Foundation CoreFoundation CoreGraphics QuartzCore Security CoreText Metal; do
             B="$ROOT/System/Library/Frameworks/$fw.framework/$fw"
             if [ -f "$B" ]; then
               echo "FW $fw size=$(stat -f %z "$B") arch=$(lipo -archs "$B" 2>/dev/null)" >> $L
             fi
           done
-          {
-            echo "--- UIKit build version"
-            vtool -show-build "$ROOT/System/Library/Frameworks/UIKit.framework/UIKit" 2>/dev/null | head -30
-            echo "--- UIKit deps"
-            otool -L "$ROOT/System/Library/Frameworks/UIKit.framework/UIKit" 2>/dev/null | head -20
-            echo "--- usr/lib total"
-            ls -1 "$ROOT/usr/lib" 2>/dev/null | wc -l
-            echo "--- private frameworks total"
-            ls -1 "$ROOT/System/Library/PrivateFrameworks" 2>/dev/null | wc -l
-            echo "--- swift libs"
-            ls -1 "$ROOT/usr/lib/swift" 2>/dev/null | head -10
-          } >> $L 2>&1
+          echo "--- UIKit build" >> $L
+          vtool -show-build "$ROOT/System/Library/Frameworks/UIKit.framework/UIKit" >> $L 2>&1
+          echo "--- UIKit deps" >> $L
+          otool -L "$ROOT/System/Library/Frameworks/UIKit.framework/UIKit" >> $L 2>&1
+          echo "--- usrlib=$(ls -1 "$ROOT/usr/lib" 2>/dev/null | wc -l)" >> $L
+          echo "--- private=$(ls -1 "$ROOT/System/Library/PrivateFrameworks" 2>/dev/null | wc -l)" >> $L
+          echo "--- swift" >> $L
+          ls -1 "$ROOT/usr/lib/swift" >> $L 2>&1
+          exit 0
 
-      - name: symbol scan
+      - name: symbols
         if: always()
         run: |
+          set +e
           L=probe-${{ matrix.os }}.log
           F=""
-          for c in \
-            $(ls -d /Library/Developer/CoreSimulator/Volumes/*/Library/Developer/CoreSimulator/Profiles/Runtimes/*/Contents/Resources/RuntimeRoot 2>/dev/null) \
-            $(ls -d /Library/Developer/CoreSimulator/Profiles/Runtimes/*/Contents/Resources/RuntimeRoot 2>/dev/null)
-          do
+          for c in $(find /Library/Developer/CoreSimulator -maxdepth 8 -name RuntimeRoot -type d 2>/dev/null); do
             if [ -f "$c/System/Library/Frameworks/Foundation.framework/Foundation" ]; then F="$c/System/Library/Frameworks/Foundation.framework/Foundation"; break; fi
           done
-          [ -z "$F" ] && { echo "NO_FOUNDATION" >> $L; exit 0; }
-          {
-            echo "--- Foundation exports=$(nm -gU "$F" 2>/dev/null | wc -l)"
-            echo "--- Foundation objc classes=$(nm -gU "$F" 2>/dev/null | grep -c '_OBJC_CLASS_\$_')"
-            echo "--- Foundation undef=$(nm -u "$F" 2>/dev/null | wc -l)"
-            echo "--- UIKit objc classes=$(nm -gU "$(dirname $(dirname $F))/UIKit.framework/UIKit" 2>/dev/null | grep -c '_OBJC_CLASS_\$_')"
-          } >> $L 2>&1
+          if [ -z "$F" ]; then echo "NO_FOUNDATION" >> $L; exit 0; fi
+          echo "--- Foundation exports=$(nm -gU "$F" 2>/dev/null | wc -l)" >> $L
+          echo "--- Foundation classes=$(nm -gU "$F" 2>/dev/null | grep -c '_OBJC_CLASS_')" >> $L
+          echo "--- Foundation undef=$(nm -u "$F" 2>/dev/null | wc -l)" >> $L
+          U="$(dirname $(dirname "$F"))/UIKit.framework/UIKit"
+          if [ -f "$U" ]; then
+            echo "--- UIKit classes=$(nm -gU "$U" 2>/dev/null | grep -c '_OBJC_CLASS_')" >> $L
+            echo "--- UIKit undef=$(nm -u "$U" 2>/dev/null | wc -l)" >> $L
+          fi
+          exit 0
 
-      - uses: actions/upload-artifact@v4
+      - name: upload
         if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: probe-${{ matrix.os }}
           path: probe-${{ matrix.os }}.log
