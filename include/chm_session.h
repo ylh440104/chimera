@@ -111,6 +111,8 @@ void *chm_foundation_lookup_method(const char *cls_name, const char *sel);
 void chm_foundation_note_missing_selector(const char *cls_name, const char *sel);
 int chm_objc_session_add_method(chm_session *s, const chm_method_reg *m);
 
+void chm_libc_set_session(chm_session *s);
+
 void *chm_frameworks_lookup(const char *name);
 int chm_frameworks_count(void);
 

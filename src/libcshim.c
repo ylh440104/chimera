@@ -1,4 +1,5 @@
 #include "chm_runtime.h"
+#include "chm_session.h"
 
 #include <dirent.h>
 #include <fcntl.h>
@@ -384,9 +385,32 @@ static char *safe_strdup(const char *s)
     return strdup(s);
 }
 
+static chm_session *g_null_log_session;
+
+void chm_libc_set_session(chm_session *s)
+{
+    g_null_log_session = s;
+}
+
+static int g_null_strlen_count;
+
+static void note_null_strlen(void)
+{
+    if (!g_null_log_session)
+        return;
+    if (g_null_strlen_count < 8) {
+        g_null_strlen_count++;
+        chm_session_log(g_null_log_session, "strlen(NULL) intercepted #%d", g_null_strlen_count);
+    }
+}
+
 static size_t safe_strlen(const char *s)
 {
-    return s ? strlen(s) : 0;
+    if (!s) {
+        note_null_strlen();
+        return 0;
+    }
+    return strlen(s);
 }
 
 static int safe_strcmp(const char *a, const char *b)

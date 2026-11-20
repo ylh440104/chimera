@@ -11,15 +11,9 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - macos-13
-          - macos-14
           - macos-15
-          - macos-13-large
-          - macos-14-large
-          - macos-15-large
-          - macos-13-xlarge
-          - macos-14-xlarge
-          - macos-15-xlarge
+          - macos-14
+          - macos-13
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -47,7 +41,20 @@ jobs:
           echo "--- sdkpath"
           xcrun --sdk iphonesimulator --show-sdk-path
           echo "--- runtime roots"
-          find /Library/Developer/CoreSimulator -maxdepth 8 -name RuntimeRoot -type d
+          find /Library/Developer/CoreSimulator -maxdepth 16 -name RuntimeRoot -type d
+          echo "--- cryptex"
+          ls -1 /Library/Developer/CoreSimulator/Cryptex 2>&1
+          find /Library/Developer/CoreSimulator/Cryptex -maxdepth 6 -name '*.dmg' -o -maxdepth 6 -type d -name '*RuntimeRoot*' 2>/dev/null | head -20
+          echo "--- assets"
+          ls -1 /System/Library/AssetsV2 2>&1 | head -20
+          echo "--- all RuntimeRoot under AssetsV2"
+          find /System/Library/AssetsV2 -maxdepth 10 -name RuntimeRoot -type d 2>/dev/null | head -10
+          echo "--- volumes detail"
+          for v in /Library/Developer/CoreSimulator/Volumes/*; do
+            echo "VOL $v"
+            ls -1 "$v" 2>/dev/null | head -5
+            ls -1 "$v/Library/Developer/CoreSimulator/Profiles/Runtimes" 2>/dev/null | head -5
+          done
           } >> $L 2>&1
           exit 0
 
@@ -57,7 +64,7 @@ jobs:
           set +e
           L=probe-${{ matrix.os }}.log
           ROOT=""
-          for c in $(find /Library/Developer/CoreSimulator -maxdepth 8 -name RuntimeRoot -type d 2>/dev/null); do
+          for c in $(find /Library/Developer/CoreSimulator -maxdepth 16 -name RuntimeRoot -type d 2>/dev/null); do
             if [ -f "$c/System/Library/Frameworks/UIKit.framework/UIKit" ]; then ROOT="$c"; break; fi
           done
           if [ -z "$ROOT" ]; then echo "NO_RUNTIME_ROOT" >> $L; exit 0; fi
@@ -84,7 +91,7 @@ jobs:
           set +e
           L=probe-${{ matrix.os }}.log
           F=""
-          for c in $(find /Library/Developer/CoreSimulator -maxdepth 8 -name RuntimeRoot -type d 2>/dev/null); do
+          for c in $(find /Library/Developer/CoreSimulator -maxdepth 16 -name RuntimeRoot -type d 2>/dev/null); do
             if [ -f "$c/System/Library/Frameworks/Foundation.framework/Foundation" ]; then F="$c/System/Library/Frameworks/Foundation.framework/Foundation"; break; fi
           done
           if [ -z "$F" ]; then echo "NO_FOUNDATION" >> $L; exit 0; fi
