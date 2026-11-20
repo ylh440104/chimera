@@ -1,6 +1,3 @@
-extern void *chm_cfstr_resolve(const char *name);
-extern int chm_cfstr_is_const_name(const char *name);
-extern void *chm_cfstr_const(const char *name);
 #include "chm.h"
 #include "chm_int.h"
 #include "chm_rt.h"
@@ -16,6 +13,7 @@ extern void *chm_cfstr_const(const char *name);
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <ucontext.h>
 #include <unistd.h>
 
 #define CHM_MISSING_MAX 64
@@ -32,7 +30,7 @@ extern char **environ;
 static char g_missing[CHM_MISSING_MAX][CHM_MISSING_NAME];
 static int g_missing_count;
 static char g_last_missing[CHM_MISSING_NAME];
-static char g_fault[256];
+static char g_fault[320];
 static sigjmp_buf g_jump;
 static volatile sig_atomic_t g_armed;
 static char g_altstack[CHM_ALTSTACK_SIZE];
@@ -167,6 +165,10 @@ static const chm_shim_entry chm_shims[] = {
     { NULL, NULL }
 };
 
+extern void *chm_cfstr_resolve(const char *name);
+extern int chm_cfstr_is_const_name(const char *name);
+extern void *chm_cfstr_const(const char *name);
+
 static void note_missing(const char *name)
 {
     int i;
@@ -251,6 +253,7 @@ static void *locate_import(const char *name)
         if (strcmp(data[i].name, name) == 0)
             return data[i].addr;
     }
+
     if (chm_cfstr_is_const_name(name))
         return chm_cfstr_const(name);
     return NULL;
@@ -276,13 +279,29 @@ static void sh_trap_missing(void)
     siglongjmp(g_jump, 1);
 }
 
+void chm_trap_unimplemented(const char *what)
+{
+    if (!g_armed)
+        _exit(5);
+    snprintf(g_fault, sizeof(g_fault), "%s", what ? what : "unimplemented");
+    g_armed = 0;
+    siglongjmp(g_jump, 1);
+}
+
 static void chm_fault_handler(int sig, siginfo_t *info, void *ctx)
 {
-    (void)ctx;
+    ucontext_t *uc = (ucontext_t *)ctx;
+    unsigned long long pc = 0;
+    unsigned long long lr = 0;
+
+    if (uc) {
+        pc = (unsigned long long)uc->uc_mcontext.pc;
+        lr = (unsigned long long)uc->uc_mcontext.regs[30];
+    }
     if (!g_armed)
         _exit(3);
-    snprintf(g_fault, sizeof(g_fault), "signal %d at %p after %s",
-             sig, info ? info->si_addr : NULL,
+    snprintf(g_fault, sizeof(g_fault), "signal %d at %p pc 0x%llx lr 0x%llx after %s",
+             sig, info ? info->si_addr : NULL, pc, lr,
              g_last_missing[0] ? g_last_missing : "no import");
     g_armed = 0;
     siglongjmp(g_jump, 1);
@@ -381,12 +400,4 @@ int chm_is_encrypted(const char *path)
     }
     munmap((void *)base, (size_t)st.st_size);
     return cryptid;
-}
-void chm_trap_unimplemented(const char *what)
-{
-    if (!g_armed)
-        _exit(5);
-    snprintf(g_fault, sizeof(g_fault), "%s", what ? what : "unimplemented");
-    g_armed = 0;
-    siglongjmp(g_jump, 1);
 }
