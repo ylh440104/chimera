@@ -212,12 +212,12 @@ void *chm_resolve_import(const char *name)
     const chm_shim_entry *e;
     static const chm_data_entry data[] = {
         { "_mach_task_self_", (void *)&g_task_self },
-        { "__stack_chk_guard", (void *)&g_stack_chk_guard },
-        { "__stdoutp", (void *)&g_stdoutp },
-        { "__stdderp", (void *)&g_stdderp },
+        { "___stack_chk_guard", (void *)&g_stack_chk_guard },
+        { "___stdoutp", (void *)&g_stdoutp },
+        { "___stderrp", (void *)&g_stdderp },
         { "_environ", (void *)&g_environ },
-        { "_NSConcreteStackBlock", (void *)g_block_isa },
-        { "_NSConcreteGlobalBlock", (void *)g_block_isa },
+        { "__NSConcreteStackBlock", (void *)g_block_isa },
+        { "__NSConcreteGlobalBlock", (void *)g_block_isa },
         { NULL, NULL }
     };
     int i;
