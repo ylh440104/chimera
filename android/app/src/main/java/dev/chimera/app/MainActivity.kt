@@ -10,8 +10,8 @@ import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import java.io.File
-import java.util.zip.ZipEntry
-import java.util.zip.ZipInputStream
+import java.io.FileOutputStream
+import java.util.zip.ZipFile
 
 class MainActivity : AppCompatActivity() {
 
@@ -46,6 +46,12 @@ class MainActivity : AppCompatActivity() {
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
         )
         setContentView(root)
+
+        val pending = File(filesDir, "pending.ipa")
+        if (pending.isFile) {
+            log("自动运行 pending.ipa")
+            Thread { runFile(pending) }.start()
+        }
     }
 
     private fun log(text: String) {
@@ -58,64 +64,99 @@ class MainActivity : AppCompatActivity() {
     private fun start(uri: Uri) {
         Thread {
             try {
-                val work = File(cacheDir, "payload")
-                work.deleteRecursively()
-                work.mkdirs()
-
-                log("解包 " + uri.lastPathSegment)
-                extract(uri, work)
-
-                val app = File(work, "Payload").listFiles()
-                    ?.firstOrNull { it.isDirectory && it.name.endsWith(".app") }
-                if (app == null) {
-                    log("IPA 里没有 Payload/*.app")
+                val cached = File(cacheDir, "input.ipa")
+                log("读取 " + uri)
+                val afd = contentResolver.openAssetFileDescriptor(uri, "r")
+                if (afd == null) {
+                    log("无法打开该文件")
                     return@Thread
                 }
-
-                val exeName = readExecutable(File(app, "Info.plist"))
-                log("bundle " + app.name)
-                if (exeName == null) {
-                    log("Info.plist 里没有 CFBundleExecutable")
-                    return@Thread
+                val declared = afd.length
+                log("声明长度 " + declared)
+                afd.use { d ->
+                    FileOutputStream(cached).use { out ->
+                        d.createInputStream().use { input ->
+                            val buf = ByteArray(1 shl 16)
+                            var total = 0L
+                            var mark = 0L
+                            while (true) {
+                                val n = input.read(buf)
+                                if (n <= 0) break
+                                out.write(buf, 0, n)
+                                total += n
+                                if (total - mark >= (8 shl 20)) {
+                                    mark = total
+                                    log("已读 " + total)
+                                }
+                            }
+                            log("读完 " + total)
+                        }
+                    }
                 }
-
-                val exe = File(app, exeName)
-                if (!exe.isFile) {
-                    log("找不到可执行文件 " + exeName)
-                    return@Thread
-                }
-                log("exe " + exeName + " " + exe.length() + " 字节")
-
-                val rc = Native.run(exe.absolutePath)
-                log("返回 " + rc)
+                runFile(cached)
             } catch (t: Throwable) {
                 log("失败 " + t)
             }
         }.start()
     }
 
-    private fun extract(uri: Uri, dir: File) {
-        contentResolver.openInputStream(uri)?.use { input ->
-            ZipInputStream(input).use { zip ->
-                var entry: ZipEntry? = zip.nextEntry
-                while (entry != null) {
+    private fun runFile(ipa: File) {
+        try {
+            log("解包 " + ipa.name + " " + ipa.length() + " 字节")
+            val work = File(cacheDir, "payload")
+            work.deleteRecursively()
+            work.mkdirs()
+
+            var count = 0
+            ZipFile(ipa).use { zip ->
+                val entries = zip.entries()
+                while (entries.hasMoreElements()) {
+                    val entry = entries.nextElement()
                     val name = entry.name
-                    if (name.contains("..")) {
-                        zip.closeEntry()
-                        entry = zip.nextEntry
-                        continue
-                    }
-                    val out = File(dir, name)
+                    if (name.contains("..")) continue
+                    val out = File(work, name)
                     if (entry.isDirectory) {
                         out.mkdirs()
-                    } else {
-                        out.parentFile?.mkdirs()
-                        out.outputStream().use { os -> zip.copyTo(os) }
+                        continue
                     }
-                    zip.closeEntry()
-                    entry = zip.nextEntry
+                    out.parentFile?.mkdirs()
+                    zip.getInputStream(entry).use { input ->
+                        out.outputStream().use { output -> input.copyTo(output) }
+                    }
+                    count++
                 }
             }
+            log("解出 " + count + " 个文件")
+
+            val app = File(work, "Payload").listFiles()
+                ?.firstOrNull { it.isDirectory && it.name.endsWith(".app") }
+            if (app == null) {
+                log("没有 Payload/*.app")
+                return
+            }
+            log("bundle " + app.name)
+
+            val exeName = readExecutable(File(app, "Info.plist"))
+            if (exeName == null) {
+                log("Info.plist 里没有 CFBundleExecutable")
+                return
+            }
+            val exe = File(app, exeName)
+            if (!exe.isFile) {
+                log("找不到 " + exeName)
+                return
+            }
+            log("exe " + exeName + " " + exe.length() + " 字节")
+
+            val magic = ByteArray(4)
+            exe.inputStream().use { it.read(magic) }
+            log("magic " + magic.joinToString(" ") { String.format("%02x", it) })
+
+            val rc = Native.run(exe.absolutePath)
+            log("返回 " + rc)
+        } catch (t: Throwable) {
+            log("失败 " + t)
+            t.stackTrace.take(4).forEach { log("  at " + it) }
         }
     }
 
