@@ -41,8 +41,9 @@ jobs:
           cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -Iinclude -o chmdump tools/chmdump.c $SRC -lm -ldl
           cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -Iinclude -o chmdemand tools/chmdemand.c $SRC -lm -ldl
           cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -Iinclude -o chimera_run tools/chimera_run.c $SRC -lm -ldl
-          ./chmdump tests/fixture.ios > dump.txt
+          ./chmdump tests/fixture.ios > dump.txt || cat dump.txt
           head -3 dump.txt
+          ./chmdump 2>&1 | head -1
 
       - uses: actions/upload-artifact@v4
         with:

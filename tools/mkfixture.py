@@ -98,10 +98,11 @@ dyld_info = struct.pack("<II", 0x80000022, 48) + struct.pack(
 )
 main_cmd = struct.pack("<IIQQ", 0x80000028, 24, TEXT_OFF, 0)
 dylib_name = b"/usr/lib/libSystem.B.dylib\x00"
+dylib_size = (24 + len(dylib_name) + 7) & ~7
 dylib_cmd = (
-    struct.pack("<IIIIII", 0x0C, 24 + len(dylib_name) + 4, 24, 0, 0x10000, 0x10000)
+    struct.pack("<IIIIII", 0x0C, dylib_size, 24, 0, 0x10000, 0x10000)
     + dylib_name
-    + b"\x00\x00\x00\x00"
+    + b"\x00" * (dylib_size - 24 - len(dylib_name))
 )
 
 cmds = pagezero + text + data + link + dyld_info + main_cmd + dylib_cmd
