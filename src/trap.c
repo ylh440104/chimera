@@ -151,19 +151,33 @@ int chm_session_execute(chm_session *s, chm_image *img, int argc, char **argv)
     }
     g_armed = 0;
     {
-        void *sym = NULL;
-        Dl_info di;
+        Dl_info dp;
+        Dl_info dl;
+        char *pnm = "?";
+        char *lnm = "?";
+        uint64_t poff = 0;
+        uint64_t loff = 0;
 
-        if (dladdr((void *)(uintptr_t)g_pc, &di) && di.dli_sname)
-            sym = (void *)di.dli_sname;
+        memset(&dp, 0, sizeof(dp));
+        memset(&dl, 0, sizeof(dl));
+        if (dladdr((void *)(uintptr_t)g_pc, &dp)) {
+            if (dp.dli_sname)
+                pnm = (char *)dp.dli_sname;
+            poff = g_pc - (uint64_t)(uintptr_t)dp.dli_fbase;
+        }
+        if (dladdr((void *)(uintptr_t)g_lr, &dl)) {
+            if (dl.dli_sname)
+                lnm = (char *)dl.dli_sname;
+            loff = g_lr - (uint64_t)(uintptr_t)dl.dli_fbase;
+        }
         snprintf(g_fault, sizeof(g_fault),
-                 "signal %d fault 0x%llx pc 0x%llx lr 0x%llx sp 0x%llx x0 0x%llx x1 0x%llx selfoff 0x%llx lroff 0x%llx in %s",
-                 g_signal, (unsigned long long)g_far, (unsigned long long)g_pc,
-                 (unsigned long long)g_lr, (unsigned long long)g_sp,
-                 (unsigned long long)g_regs[0], (unsigned long long)g_regs[1],
-                 (unsigned long long)(g_pc - g_self_base),
-                 (unsigned long long)(g_lr - g_self_base),
-                 sym ? (const char *)sym : "unknown");
+                 "signal %d fault 0x%llx pc %s+0x%llx(%s) lr %s+0x%llx(%s) x0 0x%llx x1 0x%llx",
+                 g_signal, (unsigned long long)g_far,
+                 dp.dli_fname ? dp.dli_fname : "?",
+                 (unsigned long long)poff, pnm,
+                 dl.dli_fname ? dl.dli_fname : "?",
+                 (unsigned long long)loff, lnm,
+                 (unsigned long long)g_regs[0], (unsigned long long)g_regs[1]);
     }
     chm_session_log(s, "%s", g_fault);
     describe_pc(s, g_pc);

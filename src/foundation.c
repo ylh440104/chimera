@@ -6,10 +6,12 @@
 #include <string.h>
 
 #define FO_MAX_CLASSES 320
+#define FO_MAX_ITEMS 256
+
 #define FO_STRING_MAGIC 0x464f535452ull
+#define FO_DATA_MAGIC 0x464f444154ull
 #define FO_ARRAY_MAGIC 0x464f415252ull
 #define FO_DICT_MAGIC 0x464f444943ull
-#define FO_MAX_ITEMS 256
 
 typedef struct {
     uint32_t flags;
@@ -51,6 +53,13 @@ typedef struct {
 typedef struct {
     void *isa;
     uint64_t magic;
+    uint8_t *bytes;
+    int64_t length;
+} fo_data;
+
+typedef struct {
+    void *isa;
+    uint64_t magic;
     int64_t count;
     void *items[FO_MAX_ITEMS];
 } fo_array;
@@ -71,7 +80,6 @@ typedef struct {
 static fo_class *g_classes[FO_MAX_CLASSES];
 static int g_class_count;
 static chm_session *g_session;
-
 static fo_pair g_pairs[FO_MAX_ITEMS];
 static int g_pair_count;
 
@@ -136,6 +144,7 @@ static const struct {
     { "NSEnumerator", "NSObject", 16 },
     { "NSScanner", "NSObject", 32 },
     { "NSTimer", "NSObject", 32 },
+    { "NSSortDescriptor", "NSObject", 32 },
     { "UITraitCollection", "NSObject", 32 },
     { "UIResponder", "NSObject", 32 },
     { "UIView", "UIResponder", 96 },
@@ -217,6 +226,19 @@ static fo_class *fo_find(const char *name)
     return NULL;
 }
 
+static fo_class *fo_owning(void *cls)
+{
+    int i;
+
+    if (!cls)
+        return NULL;
+    for (i = 0; i < g_class_count; i++) {
+        if ((void *)&g_classes[i]->cls == cls || (void *)&g_classes[i]->meta == cls)
+            return g_classes[i];
+    }
+    return NULL;
+}
+
 static fo_class *fo_make(const char *name, const char *parent, uint32_t size)
 {
     fo_class *c = calloc(1, sizeof(*c));
@@ -244,19 +266,6 @@ static fo_class *fo_make(const char *name, const char *parent, uint32_t size)
     return c;
 }
 
-static fo_class *fo_owning(void *cls)
-{
-    int i;
-
-    if (!cls)
-        return NULL;
-    for (i = 0; i < g_class_count; i++) {
-        if ((void *)&g_classes[i]->cls == cls || (void *)&g_classes[i]->meta == cls)
-            return g_classes[i];
-    }
-    return NULL;
-}
-
 static const char *fo_class_name(void *cls)
 {
     fo_class *c = fo_owning(cls);
@@ -266,42 +275,120 @@ static const char *fo_class_name(void *cls)
     return cls ? "foreign-class" : "nil-class";
 }
 
+static void *fo_alloc(const char *cls_name, size_t min)
+{
+    fo_class *c = fo_find(cls_name);
+    size_t size = c ? c->ro.instance_size : 0;
+    void *obj;
+
+    if (size < min)
+        size = min;
+    obj = calloc(1, size);
+    if (!obj)
+        return NULL;
+    if (c)
+        *(void **)obj = &c->cls;
+    return obj;
+}
+
+static int fo_isa_is(void *obj, const char *cls_name)
+{
+    void *cls;
+    fo_class *c;
+
+    if (!obj)
+        return 0;
+    cls = *(void **)obj;
+    c = fo_owning(cls);
+    while (c) {
+        if (strcmp(c->name, cls_name) == 0)
+            return 1;
+        c = c->parent;
+    }
+    return 0;
+}
+
 static int fo_is_string(void *p)
 {
     return p && ((fo_string *)p)->magic == FO_STRING_MAGIC;
 }
 
-static fo_class *fo_class_of(void *obj)
+static int fo_is_data(void *p)
 {
-    void *cls;
-
-    if (!obj)
-        return NULL;
-    cls = *(void **)obj;
-    return fo_owning(cls);
+    return p && ((fo_data *)p)->magic == FO_DATA_MAGIC;
 }
 
-static fo_string *fo_string_new(const char *bytes)
+static int fo_is_array(void *p)
 {
-    fo_string *s = calloc(1, sizeof(*s));
-    fo_class *cls = fo_find("NSString");
-
-    if (!s)
-        return NULL;
-    s->magic = FO_STRING_MAGIC;
-    s->isa = cls ? &cls->cls : NULL;
-    s->bytes = strdup(bytes ? bytes : "");
-    s->length = s->bytes ? (int64_t)strlen(s->bytes) : 0;
-    if (!s->bytes) {
-        free(s);
-        return NULL;
-    }
-    return s;
+    return p && ((fo_array *)p)->magic == FO_ARRAY_MAGIC;
 }
 
-static const char *fo_string_bytes(void *p)
+static int fo_is_dict(void *p)
+{
+    return p && ((fo_dict *)p)->magic == FO_DICT_MAGIC;
+}
+
+static const char *fo_bytes(void *p)
 {
     return fo_is_string(p) ? ((fo_string *)p)->bytes : "";
+}
+
+static void *fo_string_new(const char *bytes)
+{
+    fo_string *s = fo_alloc("NSString", sizeof(fo_string));
+    fo_string *out = (fo_string *)s;
+
+    if (!out)
+        return NULL;
+    out->magic = FO_STRING_MAGIC;
+    out->bytes = strdup(bytes ? bytes : "");
+    if (!out->bytes) {
+        free(out);
+        return NULL;
+    }
+    out->length = (int64_t)strlen(out->bytes);
+    return out;
+}
+
+static void *fo_data_new(const void *bytes, int64_t len)
+{
+    fo_data *d = fo_alloc("NSData", sizeof(fo_data));
+
+    if (!d)
+        return NULL;
+    if (len < 0)
+        len = 0;
+    if (bytes && len) {
+        d->bytes = malloc((size_t)len);
+        if (!d->bytes) {
+            free(d);
+            return NULL;
+        }
+        memcpy(d->bytes, bytes, (size_t)len);
+    }
+    d->length = len;
+    d->magic = FO_DATA_MAGIC;
+    return d;
+}
+
+static void *fo_array_new(void)
+{
+    fo_array *a = fo_alloc("NSMutableArray", sizeof(fo_array));
+
+    if (!a)
+        return NULL;
+    a->magic = FO_ARRAY_MAGIC;
+    return a;
+}
+
+static void *fo_dict_new(void)
+{
+    fo_dict *d = fo_alloc("NSMutableDictionary", sizeof(fo_dict));
+
+    if (!d)
+        return NULL;
+    d->magic = FO_DICT_MAGIC;
+    return d;
 }
 
 static void *fo_pair_get(const char *key)
@@ -336,55 +423,70 @@ static void fo_pair_set(const char *key, void *value)
     }
 }
 
-static void *obj_retain(void *self)
+static void *singleton(const char *key, const char *cls_name)
+{
+    void *cached = fo_pair_get(key);
+
+    if (!cached) {
+        cached = fo_alloc(cls_name, 64);
+        if (cached)
+            fo_pair_set(key, cached);
+    }
+    return cached;
+}
+
+static void *o_retain(void *self)
 {
     return self;
 }
 
-static void obj_release(void *self)
+static void o_release(void *self)
 {
     (void)self;
 }
 
-static void *obj_self_impl(void *self)
+static void *o_self(void *self)
 {
     return self;
 }
 
-static void *obj_class_impl(void *self)
+static void *o_class(void *self)
 {
     return self ? *(void **)self : NULL;
 }
 
-static long obj_hash_impl(void *self)
+static long o_hash(void *self)
 {
-    if (fo_is_string(self)) {
-        const unsigned char *p = (const unsigned char *)((fo_string *)self)->bytes;
-        unsigned long h = 5381;
+    const unsigned char *p;
 
-        while (p && *p)
-            h = (h * 33) ^ *p++;
-        return (long)h;
-    }
-    return (long)(uintptr_t)self;
+    if (!fo_is_string(self))
+        return (long)(uintptr_t)self;
+    p = (const unsigned char *)((fo_string *)self)->bytes;
+    unsigned long h = 5381;
+    while (p && *p)
+        h = (h * 33) ^ *p++;
+    return (long)h;
 }
 
-static int obj_bool_yes(void *self)
+static int o_yes(void *self)
 {
     (void)self;
     return 1;
 }
 
-static int obj_bool_no(void *self)
+static int o_no(void *self)
 {
     (void)self;
     return 0;
 }
 
-static int obj_is_kind_of(void *self, void *cls)
+static int o_is_kind(void *self, void *cls)
 {
-    fo_class *c = fo_class_of(self);
+    fo_class *c;
 
+    if (!self || !cls)
+        return 0;
+    c = fo_owning(*(void **)self);
     while (c) {
         if ((void *)&c->cls == cls)
             return 1;
@@ -393,41 +495,108 @@ static int obj_is_kind_of(void *self, void *cls)
     return 0;
 }
 
-static int obj_is_member_of(void *self, void *cls)
+static int o_is_string_class(void *self)
 {
-    return (void *)fo_class_of(self) == cls;
+    return fo_isa_is(self, "NSString");
 }
 
-static int obj_responds(void *self, const char *sel)
+static int o_is_data_class(void *self)
 {
-    (void)self;
-
-    return chm_foundation_lookup_method(NULL, sel) != NULL;
+    return fo_isa_is(self, "NSData");
 }
 
-static int obj_is_equal(void *self, void *other)
+static void *s_data_utf8(void *cls, const char *bytes)
+{
+    (void)cls;
+    return bytes ? fo_data_new(bytes, (int64_t)strlen(bytes)) : fo_data_new(NULL, 0);
+}
+
+static int o_is_equal(void *self, void *other)
 {
     if (self == other)
         return 1;
     if (fo_is_string(self) && fo_is_string(other))
-        return strcmp(fo_string_bytes(self), fo_string_bytes(other)) == 0;
+        return strcmp(fo_bytes(self), fo_bytes(other)) == 0;
     return 0;
 }
 
-static int obj_compare(void *self, void *other)
+static int o_compare(void *self, void *other)
 {
     if (!fo_is_string(self) || !fo_is_string(other))
         return 0;
-    return strcmp(fo_string_bytes(self), fo_string_bytes(other));
+    return strcmp(fo_bytes(self), fo_bytes(other));
 }
 
-static void *str_with_utf8(void *cls, const char *bytes)
+static int o_responds(void *self, const char *sel)
+{
+    (void)self;
+    return chm_foundation_lookup_method(NULL, sel) != NULL;
+}
+
+static int64_t o_length(void *self)
+{
+    if (fo_is_string(self))
+        return ((fo_string *)self)->length;
+    if (fo_is_data(self))
+        return ((fo_data *)self)->length;
+    return 0;
+}
+
+static int64_t o_count(void *self)
+{
+    if (fo_is_array(self))
+        return ((fo_array *)self)->count;
+    if (fo_is_dict(self))
+        return ((fo_dict *)self)->count;
+    return 0;
+}
+
+static const char *o_utf8(void *self)
+{
+    return fo_is_string(self) ? ((fo_string *)self)->bytes : "";
+}
+
+static const char *o_description(void *self)
+{
+    if (fo_is_string(self))
+        return ((fo_string *)self)->bytes;
+    if (!self)
+        return "(null)";
+    return fo_class_name(*(void **)self);
+}
+
+static int64_t o_integer(void *self)
+{
+    return fo_is_string(self) ? strtoll(((fo_string *)self)->bytes, NULL, 10) : 0;
+}
+
+static double o_double(void *self)
+{
+    return fo_is_string(self) ? strtod(((fo_string *)self)->bytes, NULL) : 0.0;
+}
+
+static int o_bool(void *self)
+{
+    const char *b;
+
+    if (!fo_is_string(self))
+        return 0;
+    b = ((fo_string *)self)->bytes;
+    return b && (b[0] == '1' || b[0] == 't' || b[0] == 'T' || b[0] == 'y' || b[0] == 'Y');
+}
+
+static void *s_identity(void *self)
+{
+    return fo_string_new(fo_bytes(self));
+}
+
+static void *s_with_utf8(void *cls, const char *bytes)
 {
     (void)cls;
-    return fo_string_new(bytes ? bytes : "");
+    return fo_string_new(bytes);
 }
 
-static void *str_with_format(void *cls, const char *fmt, ...)
+static void *s_with_format(void *cls, const char *fmt, ...)
 {
     char buf[1024];
     va_list ap;
@@ -441,113 +610,32 @@ static void *str_with_format(void *cls, const char *fmt, ...)
     return fo_string_new(buf);
 }
 
-static int file_exists(void *self, void *path)
+static void *s_append_component(void *self, void *comp)
 {
-    (void)self;
-    (void)path;
-    return 0;
-}
-
-static int create_directory(void *self, void *path, int intermediate, void *attrs, void **error)
-{
-    (void)self;
-    (void)path;
-    (void)intermediate;
-    (void)attrs;
-    if (error)
-        *error = NULL;
-    return 0;
-}
-
-static int remove_item(void *self, void *path, void **error)
-{
-    (void)self;
-    (void)path;
-    if (error)
-        *error = NULL;
-    return 0;
-}
-
-static void *str_identity(void *self)
-{
-    return fo_string_new(fo_string_bytes(self));
-}
-
-static int64_t obj_length_impl(void *self)
-{
-    return fo_is_string(self) ? ((fo_string *)self)->length : 0;
-}
-
-static int64_t obj_count_impl(void *self)
-{
-    int64_t magic;
-
-    if (!self)
-        return 0;
-    magic = (int64_t)((fo_string *)self)->magic;
-    if (magic == (int64_t)FO_ARRAY_MAGIC || magic == (int64_t)FO_DICT_MAGIC)
-        return *(int64_t *)((uint8_t *)self + offsetof(fo_array, count));
-    return 0;
-}
-
-static const char *obj_utf8(void *self)
-{
-    return fo_is_string(self) ? ((fo_string *)self)->bytes : "";
-}
-
-static const char *obj_description(void *self)
-{
-    if (fo_is_string(self))
-        return ((fo_string *)self)->bytes;
-    if (!self)
-        return "(null)";
-    return fo_class_name((void *)fo_class_of(self));
-}
-
-static int64_t obj_integer_value(void *self)
-{
-    return fo_is_string(self) ? strtoll(((fo_string *)self)->bytes, NULL, 10) : 0;
-}
-
-static double obj_double_value(void *self)
-{
-    return fo_is_string(self) ? strtod(((fo_string *)self)->bytes, NULL) : 0.0;
-}
-
-static int obj_bool_value(void *self)
-{
-    if (!fo_is_string(self))
-        return 0;
-    const char *b = ((fo_string *)self)->bytes;
-
-    return b && (b[0] == '1' || b[0] == 't' || b[0] == 'T' || b[0] == 'y' || b[0] == 'Y');
-}
-
-static void *str_append_component(void *self, void *comp)
-{
-    const char *base = fo_string_bytes(self);
-    const char *suffix = fo_string_bytes(comp);
+    const char *base = fo_bytes(self);
+    const char *suffix = fo_bytes(comp);
     size_t blen = strlen(base);
+    size_t slen = strlen(suffix);
     char *buf;
     void *out;
 
     while (blen > 0 && base[blen - 1] == '/')
         blen--;
-    buf = malloc(blen + strlen(suffix) + 2);
+    buf = malloc(blen + slen + 2);
     if (!buf)
         return NULL;
     memcpy(buf, base, blen);
     buf[blen] = '/';
-    strcpy(buf + blen + 1, suffix);
+    memcpy(buf + blen + 1, suffix, slen + 1);
     out = fo_string_new(buf);
     free(buf);
     return out;
 }
 
-static void *str_append_string(void *self, void *tail)
+static void *s_append_string(void *self, void *tail)
 {
-    const char *a = fo_string_bytes(self);
-    const char *b = fo_string_bytes(tail);
+    const char *a = fo_bytes(self);
+    const char *b = fo_bytes(tail);
     size_t total = strlen(a) + strlen(b) + 1;
     char *buf = malloc(total);
     void *out;
@@ -560,12 +648,12 @@ static void *str_append_string(void *self, void *tail)
     return out;
 }
 
-static void *str_delete_last_component(void *self)
+static void *s_delete_last(void *self)
 {
-    const char *base = fo_string_bytes(self);
+    const char *base = fo_bytes(self);
     size_t len = strlen(base);
-    void *out;
     char *buf;
+    void *out;
 
     while (len > 1 && base[len - 1] == '/')
         len--;
@@ -588,9 +676,9 @@ static void *str_delete_last_component(void *self)
     return out;
 }
 
-static void *str_delete_path_extension(void *self)
+static void *s_delete_extension(void *self)
 {
-    const char *base = fo_string_bytes(self);
+    const char *base = fo_bytes(self);
     const char *slash = strrchr(base, '/');
     const char *dot = strrchr(base, '.');
     size_t len;
@@ -610,17 +698,17 @@ static void *str_delete_path_extension(void *self)
     return out;
 }
 
-static void *str_last_path_component(void *self)
+static void *s_last_component(void *self)
 {
-    const char *base = fo_string_bytes(self);
+    const char *base = fo_bytes(self);
     const char *slash = strrchr(base, '/');
 
     return fo_string_new(slash ? slash + 1 : base);
 }
 
-static void *str_path_extension(void *self)
+static void *s_extension(void *self)
 {
-    const char *base = fo_string_bytes(self);
+    const char *base = fo_bytes(self);
     const char *slash = strrchr(base, '/');
     const char *dot = strrchr(base, '.');
 
@@ -629,44 +717,27 @@ static void *str_path_extension(void *self)
     return fo_string_new(dot + 1);
 }
 
-static int64_t str_path_components(void)
+static int s_is_absolute(void *self)
 {
-    return 0;
-}
-
-static int str_is_absolute(void *self)
-{
-    const char *base = fo_string_bytes(self);
+    const char *base = fo_bytes(self);
 
     return base && base[0] == '/';
 }
 
-static void *arr_nil_safe_last(void *self)
+static void *s_split(void *self, void *sep)
 {
-    fo_array *a = self;
-
-    if (!a || a->magic != FO_ARRAY_MAGIC || a->count == 0)
-        return fo_string_new("");
-    return a->items[a->count - 1];
-}
-
-static void *str_components_separated(void *self, void *sep)
-{
-    const char *base = fo_string_bytes(self);
-    const char *s = fo_string_bytes(sep);
+    const char *base = fo_bytes(self);
+    const char *s = fo_bytes(sep);
     fo_array *arr;
-    fo_class *cls = fo_find("NSMutableArray");
     char *copy;
     char *cursor;
     size_t seplen;
 
     if (!s[0])
         return NULL;
-    arr = calloc(1, sizeof(*arr));
+    arr = (fo_array *)fo_array_new();
     if (!arr)
         return NULL;
-    arr->magic = FO_ARRAY_MAGIC;
-    arr->isa = cls ? &cls->cls : NULL;
     seplen = strlen(s);
     copy = strdup(base);
     if (!copy) {
@@ -691,9 +762,9 @@ static void *str_components_separated(void *self, void *sep)
     return arr;
 }
 
-static void *str_substring_to(void *self, int64_t idx)
+static void *s_substring_to(void *self, int64_t idx)
 {
-    const char *base = fo_string_bytes(self);
+    const char *base = fo_bytes(self);
     int64_t len = (int64_t)strlen(base);
     char *buf;
     void *out;
@@ -712,9 +783,9 @@ static void *str_substring_to(void *self, int64_t idx)
     return out;
 }
 
-static void *str_substring_from(void *self, int64_t idx)
+static void *s_substring_from(void *self, int64_t idx)
 {
-    const char *base = fo_string_bytes(self);
+    const char *base = fo_bytes(self);
     int64_t len = (int64_t)strlen(base);
 
     if (idx < 0 || idx > len)
@@ -722,10 +793,9 @@ static void *str_substring_from(void *self, int64_t idx)
     return fo_string_new(base + idx);
 }
 
-static void *str_lowercase(void *self)
+static void *s_lower(void *self)
 {
-    const char *base = fo_string_bytes(self);
-    char *buf = strdup(base);
+    char *buf = strdup(fo_bytes(self));
     void *out;
 
     if (!buf)
@@ -738,10 +808,9 @@ static void *str_lowercase(void *self)
     return out;
 }
 
-static void *str_uppercase(void *self)
+static void *s_upper(void *self)
 {
-    const char *base = fo_string_bytes(self);
-    char *buf = strdup(base);
+    char *buf = strdup(fo_bytes(self));
     void *out;
 
     if (!buf)
@@ -754,93 +823,98 @@ static void *str_uppercase(void *self)
     return out;
 }
 
-static int str_has_prefix(void *self, void *prefix)
+static int s_has_prefix(void *self, void *prefix)
 {
-    const char *a = fo_string_bytes(self);
-    const char *b = fo_string_bytes(prefix);
-    size_t n = strlen(b);
-
-    return strncmp(a, b, n) == 0;
+    return strncmp(fo_bytes(self), fo_bytes(prefix), strlen(fo_bytes(prefix))) == 0;
 }
 
-static int str_has_suffix(void *self, void *suffix)
+static int s_has_suffix(void *self, void *suffix)
 {
-    const char *a = fo_string_bytes(self);
-    const char *b = fo_string_bytes(suffix);
+    const char *a = fo_bytes(self);
+    const char *b = fo_bytes(suffix);
     size_t la = strlen(a);
     size_t lb = strlen(b);
 
     return lb <= la && strcmp(a + la - lb, b) == 0;
 }
 
-static void *arr_object_at(void *self, int64_t idx)
+static void *a_object_at(void *self, int64_t idx)
 {
     fo_array *a = self;
 
-    if (!a || a->magic != FO_ARRAY_MAGIC || idx < 0 || idx >= a->count)
+    if (!fo_is_array(a) || idx < 0 || idx >= a->count)
         return fo_string_new("");
     return a->items[idx];
 }
 
-static void *arr_first(void *self)
+static void *a_first(void *self)
 {
-    return arr_object_at(self, 0);
+    return a_object_at(self, 0);
 }
 
-static void arr_add(void *self, void *obj)
+static void *a_last(void *self)
 {
     fo_array *a = self;
 
-    if (!a || a->magic != FO_ARRAY_MAGIC)
+    if (!fo_is_array(a) || a->count == 0)
+        return fo_string_new("");
+    return a->items[a->count - 1];
+}
+
+static void a_add(void *self, void *obj)
+{
+    fo_array *a = self;
+
+    if (!fo_is_array(a))
         return;
     if (a->count < FO_MAX_ITEMS)
         a->items[a->count++] = obj;
 }
 
-static void *arr_joined(void *self, void *sep)
+static void *a_joined(void *self, void *sep)
 {
     fo_array *a = self;
-    const char *s = fo_string_bytes(sep);
+    const char *s = fo_bytes(sep);
     size_t total = 1;
     char *buf;
     void *out;
 
-    if (!a || a->magic != FO_ARRAY_MAGIC)
+    if (!fo_is_array(a))
         return NULL;
     for (int64_t i = 0; i < a->count; i++)
-        total += strlen(fo_string_bytes(a->items[i])) + strlen(s);
+        total += strlen(fo_bytes(a->items[i])) + strlen(s);
     buf = calloc(1, total);
     if (!buf)
         return NULL;
     for (int64_t i = 0; i < a->count; i++) {
         if (i)
             strcat(buf, s);
-        strcat(buf, fo_string_bytes(a->items[i]));
+        strcat(buf, fo_bytes(a->items[i]));
     }
     out = fo_string_new(buf);
     free(buf);
     return out;
 }
 
-static void *dict_object_for_key(void *self, void *key)
+static void *d_value(void *self, void *key)
 {
     fo_dict *d = self;
-    const char *k = fo_string_bytes(key);
+    const char *k = fo_bytes(key);
 
-    if (!d || d->magic != FO_DICT_MAGIC)
+    if (!fo_is_dict(d))
         return fo_string_new("");
     for (int64_t i = 0; i < d->count; i++) {
-        if (strcmp(fo_string_bytes(d->keys[i]), k) == 0)
+        if (strcmp(fo_bytes(d->keys[i]), k) == 0)
             return d->values[i];
     }
     return fo_string_new("");
 }
 
-static void dict_set_object(void *self, void *obj, void *key)
+static void d_set(void *self, void *obj, void *key)
 {
     fo_dict *d = self;
 
-    if (!d || d->magic != FO_DICT_MAGIC)
+    if (!fo_is_dict(d))
         return;
     if (d->count < FO_MAX_ITEMS) {
         d->keys[d->count] = key;
@@ -849,69 +923,196 @@ static void dict_set_object(void *self, void *obj, void *key)
     }
 }
 
-static void *dict_all_keys(void *self)
+static void *d_keys(void *self)
 {
     fo_dict *d = self;
     fo_array *a;
-    fo_class *cls = fo_find("NSMutableArray");
 
-    if (!d || d->magic != FO_DICT_MAGIC)
+    if (!fo_is_dict(d))
         return NULL;
-    a = calloc(1, sizeof(*a));
+    a = (fo_array *)fo_array_new();
     if (!a)
         return NULL;
-    a->magic = FO_ARRAY_MAGIC;
-    a->isa = cls ? &cls->cls : NULL;
     for (int64_t i = 0; i < d->count && a->count < FO_MAX_ITEMS; i++)
         a->items[a->count++] = d->keys[i];
     return a;
 }
 
-static void *dict_all_values(void *self)
+static void *d_values(void *self)
 {
     fo_dict *d = self;
     fo_array *a;
-    fo_class *cls = fo_find("NSMutableArray");
 
-    if (!d || d->magic != FO_DICT_MAGIC)
+    if (!fo_is_dict(d))
         return NULL;
-    a = calloc(1, sizeof(*a));
+    a = (fo_array *)fo_array_new();
     if (!a)
         return NULL;
-    a->magic = FO_ARRAY_MAGIC;
-    a->isa = cls ? &cls->cls : NULL;
     for (int64_t i = 0; i < d->count && a->count < FO_MAX_ITEMS; i++)
         a->items[a->count++] = d->values[i];
     return a;
 }
 
-static void *make_instance(const char *cls_name)
+static int f_exists(void *self, void *path)
 {
-    fo_class *c = fo_find(cls_name);
-    size_t size = c ? c->ro.instance_size : 64;
-    void *obj;
+    (void)self;
+    (void)path;
+    return 0;
+}
 
-    if (size < 64)
-        size = 64;
-    obj = calloc(1, size);
-    if (!obj)
+static int f_create_dir(void *self, void *path, int intermediate, void *attrs, void **error)
+{
+    (void)self;
+    (void)path;
+    (void)intermediate;
+    (void)attrs;
+    if (error)
+        *error = NULL;
+    return 0;
+}
+
+static int f_remove(void *self, void *path, void **error)
+{
+    (void)self;
+    (void)path;
+    if (error)
+        *error = NULL;
+    return 0;
+}
+
+static void *f_urls(void)
+{
+    fo_array *a = (fo_array *)fo_array_new();
+
+    if (!a)
         return NULL;
-    if (c)
-        *(void **)obj = &c->cls;
-    return obj;
+    a->items[a->count++] = fo_string_new("/var/mobile/Containers/Data/Application/App/Documents");
+    return a;
 }
 
-static void *singleton(const char *key, const char *cls_name)
+static void *f_contents(void)
 {
-    void *cached = fo_pair_get(key);
-
-    if (!cached) {
-        cached = make_instance(cls_name);
-        if (cached)
-            fo_pair_set(key, cached);
-    }
-    return cached;
+    return fo_array_new();
 }
+
+static void *proc_arguments(void)
+{
+    fo_array *a = (fo_array *)fo_array_new();
+
+    if (!a)
+        return NULL;
+    a->items[a->count++] = fo_string_new("/var/containers/Bundle/Application/App.app/App");
+    return a;
+}
+
+static void *proc_environment(void)
+{
+    return fo_dict_new();
+}
+
+static void *os_version(void)
+{
+    return fo_string_new("16.0");
+}
+
+static void *bundle_id(void)
+{
+    return fo_string_new("com.app.chimera");
+}
+
+static const struct {
+    const char *sel;
+    void *imp;
+} g_methods[] = {
+    { "self", (void *)o_self },
+    { "init", (void *)o_self },
+    { "retain", (void *)o_retain },
+    { "copy", (void *)o_retain },
+    { "mutableCopy", (void *)o_retain },
+    { "autorelease", (void *)o_retain },
+    { "release", (void *)o_release },
+    { "dealloc", (void *)o_release },
+    { "retainCount", (void *)o_hash },
+    { "class", (void *)o_class },
+    { "superclass", (void *)o_class },
+    { "description", (void *)o_description },
+    { "debugDescription", (void *)o_description },
+    { "hash", (void *)o_hash },
+    { "isEqual:", (void *)o_is_equal },
+    { "isEqualToString:", (void *)o_is_equal },
+    { "compare:", (void *)o_compare },
+    { "isKindOfClass:", (void *)o_is_kind },
+    { "isMemberOfClass:", (void *)o_is_kind },
+    { "respondsToSelector:", (void *)o_responds },
+    { "conformsToProtocol:", (void *)o_yes },
+    { "isProxy", (void *)o_no },
+    { "length", (void *)o_length },
+    { "lengthOfBytesUsingEncoding:", (void *)o_length },
+    { "count", (void *)o_count },
+    { "UTF8String", (void *)o_utf8 },
+    { "fileSystemRepresentation", (void *)o_utf8 },
+    { "bytes", (void *)o_utf8 },
+    { "absoluteString", (void *)s_identity },
+    { "path", (void *)s_identity },
+    { "lastPathComponent", (void *)s_last_component },
+    { "pathExtension", (void *)s_extension },
+    { "stringByDeletingLastPathComponent", (void *)s_delete_last },
+    { "stringByDeletingPathExtension", (void *)s_delete_extension },
+    { "stringByAppendingPathComponent:", (void *)s_append_component },
+    { "stringByAppendingString:", (void *)s_append_string },
+    { "componentsSeparatedByString:", (void *)s_split },
+    { "substringToIndex:", (void *)s_substring_to },
+    { "substringFromIndex:", (void *)s_substring_from },
+    { "lowercaseString", (void *)s_lower },
+    { "uppercaseString", (void *)s_upper },
+    { "hasPrefix:", (void *)s_has_prefix },
+    { "hasSuffix:", (void *)s_has_suffix },
+    { "isAbsolutePath", (void *)s_is_absolute },
+    { "stringWithUTF8String:", (void *)s_with_utf8 },
+    { "stringWithCString:encoding:", (void *)s_with_utf8 },
+    { "stringWithFormat:", (void *)s_with_format },
+    { "localizedStringWithFormat:", (void *)s_with_format },
+    { "integerValue", (void *)o_integer },
+    { "intValue", (void *)o_integer },
+    { "longLongValue", (void *)o_integer },
+    { "unsignedIntegerValue", (void *)o_integer },
+    { "floatValue", (void *)o_double },
+    { "doubleValue", (void *)o_double },
+    { "boolValue", (void *)o_bool },
+    { "objectAtIndex:", (void *)a_object_at },
+    { "objectAtIndexedSubscript:", (void *)a_object_at },
+    { "firstObject", (void *)a_first },
+    { "lastObject", (void *)a_last },
+    { "addObject:", (void *)a_add },
+    { "componentsJoinedByString:", (void *)a_joined },
+    { "objectForKey:", (void *)d_value },
+    { "objectForKeyedSubscript:", (void *)d_value },
+    { "setObject:forKey:", (void *)d_set },
+    { "allKeys", (void *)d_keys },
+    { "allValues", (void *)d_values },
+    { "fileExistsAtPath:", (void *)f_exists },
+    { "fileExistsAtPath:isDirectory:", (void *)f_exists },
+    { "createDirectoryAtPath:withIntermediateDirectories:attributes:error:", (void *)f_create_dir },
+    { "removeItemAtPath:error:", (void *)f_remove },
+    { "URLsForDirectory:inDomains:", (void *)f_urls },
+    { "URLForDirectory:inDomain:appropriateForURL:create:error:", (void *)f_urls },
+    { "contentsOfDirectoryAtPath:error:", (void *)f_contents },
+    { "processInfo", NULL },
+    { "defaultManager", NULL },
+    { "mainBundle", NULL },
+    { "arguments", (void *)proc_arguments },
+    { "environment", (void *)proc_environment },
+    { "operatingSystemVersionString", (void *)os_version },
+    { "bundleIdentifier", (void *)bundle_id },
+    { "isMacCatalystApp", (void *)o_no },
+    { "isiOSAppOnMac", (void *)o_no },
+    { "isiOSAppOnVision", (void *)o_no },
+    { "isNSString__", (void *)o_is_string_class },
+    { "isNSData__", (void *)o_is_data_class },
+    { "dataUsingEncoding:", (void *)s_data_utf8 },
+    { "dataWithBytes:length:", (void *)s_data_utf8 },
+    { NULL, NULL }
+};
 
 static void *process_info(void)
 {
@@ -927,184 +1128,6 @@ static void *main_bundle(void)
 {
     return singleton("__main_bundle", "NSBundle");
 }
-
-static void *bundle_path(void)
-{
-    return singleton("__bundle_path", "NSString");
-}
-
-static void *process_arguments(void)
-{
-    fo_array *a;
-    fo_class *cls = fo_find("NSArray");
-
-    a = calloc(1, sizeof(*a));
-    if (!a)
-        return NULL;
-    a->isa = cls ? &cls->cls : NULL;
-    a->magic = FO_ARRAY_MAGIC;
-    a->items[a->count++] = fo_string_new("/var/containers/Bundle/Application/App.app/App");
-    return a;
-}
-
-static void *process_environment(void)
-{
-    fo_dict *d;
-    fo_class *cls = fo_find("NSDictionary");
-
-    d = calloc(1, sizeof(*d));
-    if (!d)
-        return NULL;
-    d->isa = cls ? &cls->cls : NULL;
-    d->magic = FO_DICT_MAGIC;
-    return d;
-}
-
-static void *operating_system_version(void)
-{
-    return NULL;
-}
-
-static void *operating_system_name(void)
-{
-    return fo_string_new("NSMACHOperatingSystem");
-}
-
-static void *urls_for_directory(void)
-{
-    fo_array *a;
-    fo_class *cls = fo_find("NSMutableArray");
-
-    a = calloc(1, sizeof(*a));
-    if (!a)
-        return NULL;
-    a->magic = FO_ARRAY_MAGIC;
-    a->isa = cls ? &cls->cls : NULL;
-    a->items[a->count++] = fo_string_new("file:///var/mobile/Documents");
-    return a;
-}
-
-static void *contents_of_directory(void)
-{
-    fo_array *a;
-    fo_class *cls = fo_find("NSMutableArray");
-
-    a = calloc(1, sizeof(*a));
-    if (!a)
-        return NULL;
-    a->magic = FO_ARRAY_MAGIC;
-    a->isa = cls ? &cls->cls : NULL;
-    return a;
-}
-
-static int bool_no(void)
-{
-    return 0;
-}
-
-static void *nil_object(void)
-{
-    return NULL;
-}
-
-typedef struct {
-    const char *sel;
-    void *imp;
-} fo_seed_method;
-
-static const fo_seed_method g_methods[] = {
-    { "stringWithUTF8String:", (void *)str_with_utf8 },
-    { "stringWithCString:encoding:", (void *)str_with_utf8 },
-    { "stringWithFormat:", (void *)str_with_format },
-    { "localizedStringWithFormat:", (void *)str_with_format },
-    { "fileExistsAtPath:", (void *)file_exists },
-    { "fileExistsAtPath:isDirectory:", (void *)file_exists },
-    { "createDirectoryAtPath:withIntermediateDirectories:attributes:error:", (void *)create_directory },
-    { "removeItemAtPath:error:", (void *)remove_item },
-    { "self", (void *)obj_self_impl },
-    { "init", (void *)obj_self_impl },
-    { "retain", (void *)obj_retain },
-    { "copy", (void *)obj_retain },
-    { "mutableCopy", (void *)obj_retain },
-    { "autorelease", (void *)obj_retain },
-    { "release", (void *)obj_release },
-    { "dealloc", (void *)obj_release },
-    { "retainCount", (void *)obj_hash_impl },
-    { "class", (void *)obj_class_impl },
-    { "superclass", (void *)obj_class_impl },
-    { "description", (void *)obj_description },
-    { "debugDescription", (void *)obj_description },
-    { "hash", (void *)obj_hash_impl },
-    { "isEqual:", (void *)obj_is_equal },
-    { "isEqualToString:", (void *)obj_is_equal },
-    { "compare:", (void *)obj_compare },
-    { "isKindOfClass:", (void *)obj_is_kind_of },
-    { "isMemberOfClass:", (void *)obj_is_member_of },
-    { "respondsToSelector:", (void *)obj_responds },
-    { "conformsToProtocol:", (void *)obj_bool_yes },
-    { "isProxy", (void *)obj_bool_no },
-    { "zone", (void *)nil_object },
-    { "length", (void *)obj_length_impl },
-    { "lengthOfBytesUsingEncoding:", (void *)obj_length_impl },
-    { "count", (void *)obj_count_impl },
-    { "UTF8String", (void *)obj_utf8 },
-    { "fileSystemRepresentation", (void *)obj_utf8 },
-    { "absoluteString", (void *)str_identity },
-    { "path", (void *)str_identity },
-    { "lastPathComponent", (void *)str_last_path_component },
-    { "pathExtension", (void *)str_path_extension },
-    { "stringByDeletingLastPathComponent", (void *)str_delete_last_component },
-    { "stringByDeletingPathExtension", (void *)str_delete_path_extension },
-    { "stringByAppendingPathComponent:", (void *)str_append_component },
-    { "stringByAppendingString:", (void *)str_append_string },
-    { "stringByAppendingPathExtension:", (void *)str_append_string },
-    { "componentsSeparatedByString:", (void *)str_components_separated },
-    { "substringToIndex:", (void *)str_substring_to },
-    { "substringFromIndex:", (void *)str_substring_from },
-    { "lowercaseString", (void *)str_lowercase },
-    { "uppercaseString", (void *)str_uppercase },
-    { "hasPrefix:", (void *)str_has_prefix },
-    { "hasSuffix:", (void *)str_has_suffix },
-    { "isAbsolutePath", (void *)str_is_absolute },
-    { "pathComponents", (void *)str_path_components },
-    { "integerValue", (void *)obj_integer_value },
-    { "intValue", (void *)obj_integer_value },
-    { "longLongValue", (void *)obj_integer_value },
-    { "unsignedIntegerValue", (void *)obj_integer_value },
-    { "floatValue", (void *)obj_double_value },
-    { "doubleValue", (void *)obj_double_value },
-    { "boolValue", (void *)obj_bool_value },
-    { "objectAtIndex:", (void *)arr_object_at },
-    { "objectAtIndexedSubscript:", (void *)arr_object_at },
-    { "firstObject", (void *)arr_first },
-    { "lastObject", (void *)arr_nil_safe_last },
-    { "addObject:", (void *)arr_add },
-    { "addObjectsFromArray:", (void *)arr_add },
-    { "componentsJoinedByString:", (void *)arr_joined },
-    { "objectForKey:", (void *)dict_object_for_key },
-    { "objectForKeyedSubscript:", (void *)dict_object_for_key },
-    { "setObject:forKey:", (void *)dict_set_object },
-    { "allKeys", (void *)dict_all_keys },
-    { "allValues", (void *)dict_all_values },
-    { "processInfo", (void *)process_info },
-    { "arguments", (void *)process_arguments },
-    { "environment", (void *)process_environment },
-    { "operatingSystemVersion", (void *)operating_system_version },
-    { "operatingSystemVersionString", (void *)operating_system_name },
-    { "operatingSystemName", (void *)operating_system_name },
-    { "globallyUniqueString", (void *)operating_system_name },
-    { "defaultManager", (void *)file_manager },
-    { "mainBundle", (void *)main_bundle },
-    { "bundlePath", (void *)bundle_path },
-    { "resourcePath", (void *)bundle_path },
-    { "URLsForDirectory:inDomains:", (void *)urls_for_directory },
-    { "URLForDirectory:inDomain:appropriateForURL:create:error:", (void *)urls_for_directory },
-    { "contentsOfDirectoryAtPath:error:", (void *)contents_of_directory },
-    { "isMacCatalystApp", (void *)bool_no },
-    { "isiOSAppOnMac", (void *)bool_no },
-    { "isiOSAppOnVision", (void *)bool_no },
-    { NULL, NULL }
-};
 
 void chm_foundation_init(chm_session *s)
 {
@@ -1128,12 +1151,14 @@ void chm_foundation_init(chm_session *s)
 
         m.cls = NULL;
         snprintf(m.sel, sizeof(m.sel), "%s", g_methods[k].sel);
+        if (!g_methods[k].imp)
+            continue;
         m.imp = g_methods[k].imp;
         if (chm_objc_session_add_method(s, &m) != 0)
             break;
     }
     if (s)
-        chm_session_log(s, "foundation: %d classes, %d selectors", g_class_count, k);
+        chm_session_log(s, "foundation: %d classes ready", g_class_count);
 }
 
 void chm_foundation_shutdown(void)
@@ -1176,8 +1201,14 @@ void *chm_foundation_lookup_method(const char *cls_name, const char *sel)
     (void)cls_name;
     if (!sel)
         return NULL;
+    if (strcmp(sel, "processInfo") == 0)
+        return (void *)process_info;
+    if (strcmp(sel, "defaultManager") == 0)
+        return (void *)file_manager;
+    if (strcmp(sel, "mainBundle") == 0)
+        return (void *)main_bundle;
     for (i = 0; g_methods[i].sel; i++) {
-        if (strcmp(g_methods[i].sel, sel) == 0)
+        if (g_methods[i].imp && strcmp(g_methods[i].sel, sel) == 0)
             return g_methods[i].imp;
     }
     return NULL;

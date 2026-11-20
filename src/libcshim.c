@@ -45,6 +45,8 @@ static void *bzero_impl(void *p, size_t n)
 
 static void *memchr_impl(const void *p, int c, size_t n)
 {
+    if (!p || !n)
+        return NULL;
     return memchr(p, c, n);
 }
 
@@ -78,9 +80,17 @@ static char *strcat_chk_impl(char *d, const char *s, size_t cap)
     return strcat(d, s);
 }
 
-static int strncmp_impl(const char *a, const char *b, size_t n)
+static int safe_memcmp(const void *a, const void *b, size_t n)
 {
-    return strncmp(a, b, n);
+    if (!n)
+        return 0;
+    if (!a && !b)
+        return 0;
+    if (!a)
+        return -1;
+    if (!b)
+        return 1;
+    return memcmp(a, b, n);
 }
 
 static char *strerror_impl(int e)
@@ -354,6 +364,82 @@ static int dladdr_impl(const void *addr, void *info)
     return 0;
 }
 
+static size_t safe_strlen(const char *s)
+{
+    return s ? strlen(s) : 0;
+}
+
+static int safe_strcmp(const char *a, const char *b)
+{
+    if (!a && !b)
+        return 0;
+    if (!a)
+        return -1;
+    if (!b)
+        return 1;
+    return strcmp(a, b);
+}
+
+static int safe_strncmp(const char *a, const char *b, size_t n)
+{
+    if (!a && !b)
+        return 0;
+    if (!a)
+        return -1;
+    if (!b)
+        return 1;
+    return strncmp(a, b, n);
+}
+
+static char *safe_strstr(const char *h, const char *n)
+{
+    if (!h || !n)
+        return NULL;
+    return strstr(h, n);
+}
+
+static char *safe_strcpy(char *d, const char *s)
+{
+    if (!d)
+        return d;
+    if (!s) {
+        d[0] = 0;
+        return d;
+    }
+    return strcpy(d, s);
+}
+
+static void *safe_memcpy(void *d, const void *s, size_t n)
+{
+    if (!d || !s || !n)
+        return d;
+    return memcpy(d, s, n);
+}
+
+static void *safe_memmove(void *d, const void *s, size_t n)
+{
+    if (!d || !s || !n)
+        return d;
+    return memmove(d, s, n);
+}
+
+static void *safe_memset(void *d, int c, size_t n)
+{
+    if (!d || !n)
+        return d;
+    return memset(d, c, n);
+}
+
+static char *safe_basename(char *p)
+{
+    return p ? basename_impl(p) : (char *)"/";
+}
+
+static char *safe_dirname(char *p)
+{
+    return p ? dirname_impl(p) : (char *)".";
+}
+
 #define FN(n, f, k) { n, (void *)(f), k }
 
 static const chm_entry g_entries[] = {
@@ -362,10 +448,10 @@ static const chm_entry g_entries[] = {
     FN("_realloc", realloc, "libc.alloc"),
     FN("_reallocf", realloc, "libc.alloc"),
     FN("_free", free, "libc.alloc"),
-    FN("_memcmp", memcmp, "libc.mem"),
-    FN("_memcpy", memcpy, "libc.mem"),
-    FN("_memmove", memmove, "libc.mem"),
-    FN("_memset", memset, "libc.mem"),
+    FN("_memcmp", safe_memcmp, "libc.mem"),
+    FN("_memcpy", safe_memcpy, "libc.mem"),
+    FN("_memmove", safe_memmove, "libc.mem"),
+    FN("_memset", safe_memset, "libc.mem"),
     FN("_memchr", memchr_impl, "libc.mem"),
     FN("_memcpy_chk", memcpy_chk_impl, "libc.mem"),
     FN("_memmove_chk", memmove_chk_impl, "libc.mem"),
@@ -373,15 +459,15 @@ static const chm_entry g_entries[] = {
     FN("_strcpy_chk", strcpy_chk_impl, "libc.str"),
     FN("_strcat_chk", strcat_chk_impl, "libc.str"),
     FN("_bzero", bzero_impl, "libc.mem"),
-    FN("_strcmp", strcmp, "libc.str"),
-    FN("_strncmp", strncmp_impl, "libc.str"),
-    FN("_strlen", strlen, "libc.str"),
-    FN("_strstr", strstr, "libc.str"),
-    FN("_strcpy", strcpy, "libc.str"),
+    FN("_strcmp", safe_strcmp, "libc.str"),
+    FN("_strncmp", safe_strncmp, "libc.str"),
+    FN("_strlen", safe_strlen, "libc.str"),
+    FN("_strstr", safe_strstr, "libc.str"),
+    FN("_strcpy", safe_strcpy, "libc.str"),
     FN("_strdup", strdup, "libc.str"),
     FN("_strerror", strerror_impl, "libc.str"),
-    FN("_basename", basename_impl, "libc.str"),
-    FN("_dirname", dirname_impl, "libc.str"),
+    FN("_basename", safe_basename, "libc.str"),
+    FN("_dirname", safe_dirname, "libc.str"),
     FN("_realpath$DARWIN_EXTSN", realpath_impl, "libc.str"),
     FN("_realpath", realpath_impl, "libc.str"),
     FN("_printf", printf_impl, "libc.io"),
