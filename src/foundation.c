@@ -613,8 +613,11 @@ static void *s_with_format(void *cls, void *fmt_obj, ...)
         fmt++;
         if (*fmt == '@') {
             const char *desc = o_description(va_arg(ap, void *));
-            size_t dl = strlen(desc);
+            size_t dl;
 
+            if (!desc)
+                desc = "(null)";
+            dl = strlen(desc);
             if (dl > sizeof(buf) - used - 1)
                 dl = sizeof(buf) - used - 1;
             memcpy(buf + used, desc, dl);
@@ -624,10 +627,11 @@ static void *s_with_format(void *cls, void *fmt_obj, ...)
         }
         if (*fmt == 's') {
             const char *s = va_arg(ap, const char *);
-            size_t sl = s ? strlen(s) : 0;
+            size_t sl;
 
             if (!s)
                 s = "(null)";
+            sl = strlen(s);
             if (sl > sizeof(buf) - used - 1)
                 sl = sizeof(buf) - used - 1;
             memcpy(buf + used, s, sl);
