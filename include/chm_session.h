@@ -1,0 +1,111 @@
+#ifndef CHM_SESSION_H
+#define CHM_SESSION_H
+
+#include "chm.h"
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#define CHM_MAX_IMAGES 32
+#define CHM_MAX_EXPORTS 16384
+#define CHM_MAX_MISSING 2048
+#define CHM_MAX_CLASSES 2048
+#define CHM_MAX_SELS 4096
+
+typedef enum {
+    CHM_SYM_NONE = 0,
+    CHM_SYM_IMAGE_EXPORT,
+    CHM_SYM_RUNTIME_FN,
+    CHM_SYM_RUNTIME_DATA,
+    CHM_SYM_OBJC_CLASS,
+    CHM_SYM_OBJC_METACLASS
+} chm_sym_origin;
+
+typedef struct {
+    char name[160];
+    uint64_t addr;
+    int32_t image_index;
+} chm_export_sym;
+
+typedef struct {
+    char name[CHM_MAX_NAME];
+    uint32_t hits;
+    bool weak;
+} chm_missing_sym;
+
+typedef struct {
+    char name[160];
+    void *cls;
+    void *meta;
+    int32_t image_index;
+} chm_objc_cls_entry;
+
+typedef struct chm_session {
+    chm_image images[CHM_MAX_IMAGES];
+    char image_paths[CHM_MAX_IMAGES][512];
+    int image_count;
+    char app_dir[512];
+    char exe_path[512];
+
+    chm_export_sym *exports;
+    int export_count;
+
+    chm_missing_sym *missing;
+    int missing_count;
+
+    chm_objc_cls_entry *classes;
+    int class_count;
+
+    char **sels;
+    int sel_count;
+
+    char *log_buf;
+    size_t log_cap;
+    size_t log_len;
+
+    bool prepared;
+    int exit_code;
+    char fault[512];
+} chm_session;
+
+chm_session *chm_session_create(void);
+void chm_session_destroy(chm_session *s);
+void chm_session_log(chm_session *s, const char *fmt, ...);
+int chm_session_load(chm_session *s, const char *exe_path);
+int chm_session_run(chm_session *s, int argc, char **argv);
+void chm_session_report(chm_session *s, char *out, size_t cap);
+
+void chm_objc_session_init(chm_session *s);
+void chm_objc_session_scan(chm_session *s, int img_idx);
+void *chm_objc_session_get_class(chm_session *s, const char *name);
+void *chm_objc_session_get_metaclass(chm_session *s, const char *name);
+void *chm_objc_session_lookup(chm_session *s, const char *name);
+void *chm_objc_msgSend_bridge(void);
+void *chm_objc_msgSendSuper2_bridge(void);
+void *chm_objc_resolve_imp(void *self, const char *sel);
+void *chm_objc_resolve_super2_imp(void *super_ptr, const char *sel);
+
+void chm_dispatch_init(void);
+void *chm_dispatch_lookup(const char *name);
+size_t chm_dispatch_pump(chm_session *s);
+size_t chm_dispatch_pending(void);
+
+void chm_foundation_init(chm_session *s);
+void chm_foundation_shutdown(void);
+int chm_foundation_class_count(void);
+void *chm_foundation_lookup_class(const char *name);
+void *chm_foundation_lookup_metaclass(const char *name);
+void *chm_foundation_lookup_method(const char *cls_name, const char *sel);
+void chm_foundation_note_missing_selector(const char *cls_name, const char *sel);
+
+void *chm_frameworks_lookup(const char *name);
+int chm_frameworks_count(void);
+
+void chm_trap_install(void);
+int chm_session_execute(chm_session *s, chm_image *img, int argc, char **argv);
+uint64_t chm_trap_pc(void);
+uint64_t chm_trap_lr(void);
+int chm_trap_signal(void);
+uint64_t chm_trap_fault_addr(void);
+
+#endif

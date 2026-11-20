@@ -6,6 +6,7 @@ on:
       - "src/**"
       - "include/**"
       - "tests/**"
+      - "tools/**"
       - ".github/workflows/native.yml"
   workflow_dispatch:
 
@@ -15,37 +16,41 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: compiler
+      - name: toolchain
         run: |
           cc --version | head -1
           uname -m
 
-      - name: fixup unit tests
+      - name: fixup regression
         run: |
           cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -Iinclude \
              -o test_fixups tests/test_fixups.c src/macho.c src/fixups.c
           ./test_fixups
 
-      - name: malformed input rejection
+      - name: malformed rejection
         run: |
           cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -Iinclude \
              -o test_reject tests/test_reject.c src/macho.c src/fixups.c
           ./test_reject
 
-      - name: tools build
+      - name: session build
         run: |
-          cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -Iinclude \
-             -o chmdump tools/chmdump.c src/macho.c src/fixups.c
-          cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -Iinclude \
-             -o symbol_demand tests/symbol_demand.c src/macho.c src/fixups.c
-          echo tools ok
+          SRC="src/macho.c src/fixups.c src/session.c src/objc.c src/objc_arm64.S \
+               src/libcshim.c src/dispatch.c src/foundation.c src/frameworks.c \
+               src/trap.c src/loader.c"
+          cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -Iinclude -o chmdump tools/chmdump.c $SRC -lm -ldl
+          cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -Iinclude -o chmdemand tools/chmdemand.c $SRC -lm -ldl
+          cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -Iinclude -o chimera_run tools/chimera_run.c $SRC -lm -ldl
+          ./chmdump tests/fixture.ios > dump.txt
+          head -3 dump.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: chimera-native-tools
+          name: chimera-native
           path: |
             chmdump
+            chmdemand
+            chimera_run
             test_fixups
             test_reject
-            symbol_demand
           if-no-files-found: error

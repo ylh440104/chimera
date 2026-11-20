@@ -249,6 +249,23 @@ static int fileno_impl(FILE *stream)
     return stream ? fileno(stream) : -1;
 }
 
+static _Thread_local int g_errno_cell;
+
+static int *sh_errno_impl(void)
+{
+    return &g_errno_cell;
+}
+
+static void *sh_mmap_impl(void *addr, size_t len, int prot, int flags, int fd, long off)
+{
+    return mmap(addr, len, prot, flags, fd, (off_t)off);
+}
+
+static int personality_impl(void)
+{
+    return 0;
+}
+
 static void stack_chk_fail_impl(void)
 {
     abort();
@@ -374,6 +391,15 @@ static const chm_entry g_entries[] = {
     FN("_abort", abort, "libc.proc"),
     FN("_exit", exit, "libc.proc"),
     FN("___stack_chk_fail", stack_chk_fail_impl, "libc.guard"),
+    FN("___memcpy_chk", memcpy_chk_impl, "libc.mem"),
+    FN("___memmove_chk", memmove_chk_impl, "libc.mem"),
+    FN("___memset_chk", memset_chk_impl, "libc.mem"),
+    FN("___strcpy_chk", strcpy_chk_impl, "libc.str"),
+    FN("___error", sh_errno_impl, "libc.errno"),
+    FN("___fcntl", fcntl_impl, "libc.io"),
+    FN("___mmap", sh_mmap_impl, "libc.mem"),
+    FN("_objc_personality_v0", personality_impl, "unwind"),
+    FN("___objc_personality_v0", personality_impl, "unwind"),
     FN("___assert_rtn", assert_rtn_impl, "libc.guard"),
     FN("_access", access, "libc.io"),
     FN("_open", open_impl, "libc.io"),
@@ -436,6 +462,11 @@ static const chm_entry g_entries[] = {
     FN("_dyld_get_image_vmaddr_slide", dyld_get_image_vmaddr_slide_impl, "dyld"),
     FN("_dyld_get_active_platform", dyld_get_active_platform_impl, "dyld"),
     FN("_dyld_register_func_for_add_image", dyld_register_func_for_add_image_impl, "dyld"),
+    FN("__dyld_image_count", dyld_image_count_impl, "dyld"),
+    FN("__dyld_get_image_header", dyld_get_image_header_impl, "dyld"),
+    FN("__dyld_get_image_name", dyld_get_image_name_impl, "dyld"),
+    FN("__dyld_get_image_vmaddr_slide", dyld_get_image_vmaddr_slide_impl, "dyld"),
+    FN("__dyld_register_func_for_add_image", dyld_register_func_for_add_image_impl, "dyld"),
     FN("dyld_stub_binder", dyld_stub_binder_impl, "dyld"),
     FN("__tlv_bootstrap", tlv_bootstrap_impl, "libc.tlv"),
     FN("__Unwind_Resume", unwind_resume_impl, "unwind"),

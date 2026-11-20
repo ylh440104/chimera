@@ -10,16 +10,18 @@ import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import java.io.File
-import java.io.FileOutputStream
 import java.util.zip.ZipFile
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var logView: TextView
+    private lateinit var openButton: Button
+    private lateinit var runButton: Button
+    private var job: Thread? = null
 
     private val picker =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
-            if (uri != null) start(uri)
+            if (uri != null) importAndLoad(uri)
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -29,9 +31,14 @@ class MainActivity : AppCompatActivity() {
         root.orientation = LinearLayout.VERTICAL
         root.setPadding(48, 96, 48, 48)
 
-        val button = Button(this)
-        button.text = "导入 IPA"
-        button.setOnClickListener { picker.launch(arrayOf("*/*")) }
+        openButton = Button(this)
+        openButton.text = "导入 IPA"
+        openButton.setOnClickListener { picker.launch(arrayOf("*/*")) }
+
+        runButton = Button(this)
+        runButton.text = "运行"
+        runButton.isEnabled = false
+        runButton.setOnClickListener { runLoaded() }
 
         logView = TextView(this)
         logView.textSize = 11f
@@ -40,118 +47,130 @@ class MainActivity : AppCompatActivity() {
         val scroll = ScrollView(this)
         scroll.addView(logView)
 
-        root.addView(button)
+        root.addView(openButton)
+        root.addView(runButton)
         root.addView(
             scroll,
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
         )
         setContentView(root)
-
-        val pending = File(filesDir, "pending.ipa")
-        if (pending.isFile) {
-            log("自动运行 pending.ipa")
-            Thread { runFile(pending) }.start()
-        }
     }
 
     private fun log(text: String) {
         runOnUiThread {
             logView.append(text)
             logView.append("\n")
+            (logView.parent as? ScrollView)?.post {
+                (logView.parent as? ScrollView)?.fullScroll(ScrollView.FOCUS_DOWN)
+            }
         }
     }
 
-    private fun start(uri: Uri) {
-        Thread {
+    private fun importAndLoad(uri: Uri) {
+        if (job != null) {
+            log("已有任务在执行")
+            return
+        }
+        runButton.isEnabled = false
+        job = Thread {
             try {
-                val cached = File(cacheDir, "input.ipa")
+                val staging = File(cacheDir, "staging")
+                staging.deleteRecursively()
+                staging.mkdirs()
+                val ipa = File(staging, "input.ipa")
                 log("读取 " + uri)
-                val afd = contentResolver.openAssetFileDescriptor(uri, "r")
-                if (afd == null) {
+                contentResolver.openInputStream(uri)?.use { input ->
+                    ipa.outputStream().use { output -> input.copyTo(output) }
+                } ?: run {
                     log("无法打开该文件")
                     return@Thread
                 }
-                log("声明长度 " + afd.length)
-                afd.use { d ->
-                    FileOutputStream(cached).use { out ->
-                        d.createInputStream().use { input ->
-                            val buf = ByteArray(1 shl 16)
-                            var total = 0L
-                            while (true) {
-                                val n = input.read(buf)
-                                if (n <= 0) break
-                                out.write(buf, 0, n)
-                                total += n
-                            }
-                            log("读完 " + total)
+                log("已缓存 " + ipa.length() + " 字节")
+
+                val work = File(cacheDir, "app")
+                work.deleteRecursively()
+                work.mkdirs()
+                var count = 0
+                ZipFile(ipa).use { zip ->
+                    val entries = zip.entries()
+                    while (entries.hasMoreElements()) {
+                        val entry = entries.nextElement()
+                        val name = entry.name
+                        if (name.contains("..") || name.startsWith("/")) continue
+                        val out = File(work, name)
+                        if (entry.isDirectory) {
+                            out.mkdirs()
+                            continue
                         }
+                        if (entry.size > MAX_ENTRY_BYTES) {
+                            log("跳过超大条目 " + name)
+                            continue
+                        }
+                        out.parentFile?.mkdirs()
+                        zip.getInputStream(entry).use { input ->
+                            out.outputStream().use { output -> input.copyTo(output) }
+                        }
+                        count++
                     }
                 }
-                runFile(cached)
+                log("解出 " + count + " 个文件")
+
+                val app = File(work, "Payload").listFiles()
+                    ?.firstOrNull { it.isDirectory && it.name.endsWith(".app") }
+                if (app == null) {
+                    log("IPA 里没有 Payload/*.app")
+                    return@Thread
+                }
+                val exeName = readExecutable(File(app, "Info.plist"))
+                if (exeName == null) {
+                    log("Info.plist 里没有 CFBundleExecutable")
+                    return@Thread
+                }
+                val exe = File(app, exeName)
+                if (!exe.isFile) {
+                    log("找不到可执行文件 " + exeName)
+                    return@Thread
+                }
+                log("bundle " + app.name + " exe " + exeName)
+
+                val report = Native.load(exe.absolutePath)
+                report.split("\n").forEach { if (it.isNotEmpty()) log(it) }
+                Native.report().split("\n").forEach { if (it.isNotEmpty() && !report.contains(it)) log(it) }
+                runOnUiThread { runButton.isEnabled = true }
+                log("已装载，可以点运行")
             } catch (t: Throwable) {
                 log("失败 " + t)
+            } finally {
+                job = null
             }
         }.start()
     }
 
-    private fun runFile(ipa: File) {
-        try {
-            log("解包 " + ipa.name + " " + ipa.length() + " 字节")
-            val work = File(cacheDir, "payload")
-            work.deleteRecursively()
-            work.mkdirs()
-
-            var count = 0
-            ZipFile(ipa).use { zip ->
-                val entries = zip.entries()
-                while (entries.hasMoreElements()) {
-                    val entry = entries.nextElement()
-                    val name = entry.name
-                    if (name.contains("..")) continue
-                    val out = File(work, name)
-                    if (entry.isDirectory) {
-                        out.mkdirs()
-                        continue
-                    }
-                    out.parentFile?.mkdirs()
-                    zip.getInputStream(entry).use { input ->
-                        out.outputStream().use { output -> input.copyTo(output) }
-                    }
-                    count++
-                }
-            }
-            log("解出 " + count + " 个文件")
-
-            val app = File(work, "Payload").listFiles()
-                ?.firstOrNull { it.isDirectory && it.name.endsWith(".app") }
-            if (app == null) {
-                log("没有 Payload/*.app")
-                return
-            }
-            log("bundle " + app.name)
-
-            val exeName = readExecutable(File(app, "Info.plist"))
-            if (exeName == null) {
-                log("Info.plist 里没有 CFBundleExecutable")
-                return
-            }
-            val exe = File(app, exeName)
-            if (!exe.isFile) {
-                log("找不到 " + exeName)
-                return
-            }
-            log("exe " + exeName + " " + exe.length() + " 字节")
-
-            val magic = ByteArray(4)
-            exe.inputStream().use { it.read(magic) }
-            log("magic " + magic.joinToString(" ") { String.format("%02x", it) })
-
-            val report = Native.run(exe.absolutePath)
-            log("---- 报告 ----")
-            report.split("\n").forEach { if (it.isNotEmpty()) log(it) }
-        } catch (t: Throwable) {
-            log("失败 " + t)
+    private fun runLoaded() {
+        if (job != null) {
+            log("已有任务在执行")
+            return
         }
+        runButton.isEnabled = false
+        job = Thread {
+            try {
+                log("执行主入口")
+                log(Native.run())
+                val pumped = Native.pump()
+                if (pumped > 0) log("主队列执行 $pumped 个 block")
+                Native.report().split("\n").forEach { if (it.isNotEmpty()) log(it) }
+            } catch (t: Throwable) {
+                log("运行时异常 " + t)
+            } finally {
+                runOnUiThread { runButton.isEnabled = true }
+                job = null
+            }
+        }.start()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        Native.release()
     }
 
     private fun readExecutable(plist: File): String? {
@@ -163,5 +182,9 @@ class MainActivity : AppCompatActivity() {
         }
         val match = Regex("<key>CFBundleExecutable</key>\\s*<string>([^<]+)</string>").find(text)
         return match?.groupValues?.get(1)
+    }
+
+    companion object {
+        private const val MAX_ENTRY_BYTES = 256L * 1024 * 1024
     }
 }

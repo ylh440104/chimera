@@ -7,6 +7,18 @@ class Native {
         }
 
         @JvmStatic
-        external fun run(path: String): String
+        external fun load(path: String): String
+
+        @JvmStatic
+        external fun run(): String
+
+        @JvmStatic
+        external fun report(): String
+
+        @JvmStatic
+        external fun pump(): Int
+
+        @JvmStatic
+        external fun release()
     }
 }

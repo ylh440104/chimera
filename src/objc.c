@@ -1,16 +1,10 @@
-extern void *chm_objc_empty_class(const char *name);
-extern void *chm_objc_missing_method(void *self, const char *sel);
-extern void *chm_cfstr_builtin(void *self, const char *sel);
-#include "chm.h"
-#include "chm_int.h"
+#include "chm_session.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define CHM_FAST_DATA_MASK 0x00007ffffffffff8ull
-#define CHM_MAX_CLASSES 1024
-#define CHM_MAX_SELS 1024
 #define CHM_METHOD_LIST_SMALL 0x80000000u
 
 typedef struct {
@@ -52,61 +46,136 @@ typedef struct {
     uint32_t count;
 } chm_method_list;
 
-typedef struct {
-    char name[160];
-    chm_objc_class *cls;
-    chm_objc_class *meta;
-} chm_class_entry;
+extern void chm_objc_msgSend_trampoline(void);
+extern void chm_objc_msgSendSuper2_trampoline(void);
 
-static chm_class_entry g_classes[CHM_MAX_CLASSES];
-static int g_class_count;
-static char *g_sels[CHM_MAX_SELS];
-static int g_sel_count;
-static char g_block_isa[64];
+static chm_session *g_active_session;
+static uint8_t g_empty_cache[64];
+static uint8_t g_block_isa[64];
+static uint8_t g_cfstr_isa[64];
 
-static chm_class_ro *chm_class_ro_of(chm_objc_class *c)
+static chm_class_ro *ro_of(chm_objc_class *c)
 {
-    uint64_t bits;
-
     if (!c)
         return NULL;
-    bits = c->bits & CHM_FAST_DATA_MASK;
-    return (chm_class_ro *)(uintptr_t)bits;
+    return (chm_class_ro *)(uintptr_t)(c->bits & CHM_FAST_DATA_MASK);
 }
 
-static const char *chm_class_name(chm_objc_class *c)
+static const char *class_name(chm_objc_class *c)
 {
-    chm_class_ro *ro = chm_class_ro_of(c);
+    chm_class_ro *ro = ro_of(c);
 
     return ro ? ro->name : NULL;
 }
 
-static chm_method_list *chm_class_methods(chm_objc_class *c)
+static chm_method_list *class_methods(chm_objc_class *c)
 {
-    chm_class_ro *ro = chm_class_ro_of(c);
+    chm_class_ro *ro = ro_of(c);
 
     return ro ? (chm_method_list *)(uintptr_t)ro->methods : NULL;
 }
 
-static size_t chm_class_size(chm_objc_class *c)
+static size_t class_size(chm_objc_class *c)
 {
-    chm_class_ro *ro = chm_class_ro_of(c);
+    chm_class_ro *ro = ro_of(c);
 
     return ro ? (size_t)ro->instance_size : 0;
 }
 
-void chm_objc_scan(chm_image *img, chm_report *r)
+static void *method_imp_in_list(chm_method_list *ml, const char *sel)
 {
+    uint32_t header;
+    uint32_t entsize;
+    uint32_t i;
+    uint8_t *base;
+
+    if (!ml || !sel)
+        return NULL;
+    header = ml->entsize_and_flags;
+    base = (uint8_t *)ml + sizeof(chm_method_list);
+    if (header & CHM_METHOD_LIST_SMALL) {
+        chm_small_method *m = (chm_small_method *)base;
+
+        for (i = 0; i < ml->count; i++) {
+            const char *name = (const char *)&m[i] + m[i].name_offset;
+
+            if (strcmp(name, sel) == 0)
+                return (void *)((uint8_t *)&m[i] + m[i].imp_offset);
+        }
+        return NULL;
+    }
+    entsize = header & ~0x3u;
+    if (entsize < sizeof(chm_classic_method))
+        entsize = sizeof(chm_classic_method);
+    for (i = 0; i < ml->count; i++) {
+        chm_classic_method *e = (chm_classic_method *)(base + (size_t)i * entsize);
+
+        if (e->name && strcmp(e->name, sel) == 0)
+            return e->imp;
+    }
+    return NULL;
+}
+
+void *chm_objc_resolve_imp(void *self, const char *sel)
+{
+    chm_objc_class *c;
+    int depth = 0;
+
+    if (!self || !sel)
+        return NULL;
+    c = (chm_objc_class *)(*(void **)self);
+    while (c && depth < 64) {
+        void *imp = method_imp_in_list(class_methods(c), sel);
+
+        if (imp)
+            return imp;
+        c = (chm_objc_class *)c->superclass;
+        depth++;
+    }
+    return chm_foundation_lookup_method(NULL, sel);
+}
+
+void *chm_objc_resolve_super2_imp(void *super_ptr, const char *sel)
+{
+    void **s = (void **)super_ptr;
+    chm_objc_class *c;
+    int depth = 0;
+
+    if (!s || !sel)
+        return NULL;
+    c = (chm_objc_class *)s[1];
+    if (c)
+        c = (chm_objc_class *)c->superclass;
+    while (c && depth < 64) {
+        void *imp = method_imp_in_list(class_methods(c), sel);
+
+        if (imp)
+            return imp;
+        c = (chm_objc_class *)c->superclass;
+        depth++;
+    }
+    return chm_foundation_lookup_method(NULL, sel);
+}
+
+void chm_objc_session_init(chm_session *s)
+{
+    g_active_session = s;
+    s->class_count = 0;
+    s->sel_count = 0;
+}
+
+void chm_objc_session_scan(chm_session *s, int img_idx)
+{
+    chm_image *img = &s->images[img_idx];
     uint32_t i;
     uint32_t k;
-    int found = 0;
+    int added = 0;
 
-    g_class_count = 0;
     for (i = 0; i < img->nsegs; i++) {
-        chm_segment *s = &img->segs[i];
+        chm_segment *seg = &img->segs[i];
 
-        for (k = 0; k < s->nsects; k++) {
-            chm_section *sec = &s->sects[k];
+        for (k = 0; k < seg->nsects; k++) {
+            chm_section *sec = &seg->sects[k];
             uint64_t *slots;
             uint64_t count;
             uint64_t j;
@@ -121,331 +190,224 @@ void chm_objc_scan(chm_image *img, chm_report *r)
 
                 if (!c)
                     continue;
-                name = chm_class_name(c);
-                if (!name)
+                name = class_name(c);
+                if (!name || s->class_count >= CHM_MAX_CLASSES)
                     continue;
-                if (g_class_count < CHM_MAX_CLASSES) {
-                    chm_class_entry *e = &g_classes[g_class_count];
-
-                    snprintf(e->name, sizeof(e->name), "%s", name);
-                    e->cls = c;
-                    e->meta = (chm_objc_class *)c->isa;
-                    g_class_count++;
-                    found++;
-                }
+                chm_objc_cls_entry *e = &s->classes[s->class_count++];
+                snprintf(e->name, sizeof(e->name), "%s", name);
+                e->cls = c;
+                e->meta = c->isa;
+                e->image_index = img_idx;
+                added++;
             }
         }
     }
-    chm_report_add(r, "objc: 类 %d", found);
-    if (found > 0) {
-        char line[2000];
-        int shown = found < 6 ? found : 6;
-
-        line[0] = 0;
-        for (k = 0; k < (uint32_t)shown; k++) {
-            size_t used = strlen(line);
-
-            snprintf(line + used, sizeof(line) - used, " %.*s", (int)sizeof(g_classes[k].name), g_classes[k].name);
-        }
-        chm_report_add(r, "objc: 例 %s", line);
-    }
+    if (added)
+        chm_session_log(s, "objc[%d]: registered %d classes", img_idx, added);
 }
 
-int chm_objc_class_count(void)
-{
-    return g_class_count;
-}
-
-const char *chm_objc_class_at(int index)
-{
-    if (index < 0 || index >= g_class_count)
-        return NULL;
-    return g_classes[index].name;
-}
-
-void *chm_objc_getClass(const char *name)
+void *chm_objc_session_get_class(chm_session *s, const char *name)
 {
     int i;
 
-    if (!name)
+    if (!s || !name)
         return NULL;
-    for (i = 0; i < g_class_count; i++) {
-        if (strcmp(g_classes[i].name, name) == 0)
-            return g_classes[i].cls;
+    for (i = 0; i < s->class_count; i++) {
+        if (strcmp(s->classes[i].name, name) == 0)
+            return s->classes[i].cls;
     }
     return NULL;
 }
 
-void *chm_objc_getMetaClass(const char *name)
+void *chm_objc_session_get_metaclass(chm_session *s, const char *name)
 {
     int i;
 
-    if (!name)
+    if (!s || !name)
         return NULL;
-    for (i = 0; i < g_class_count; i++) {
-        if (strcmp(g_classes[i].name, name) == 0)
-            return g_classes[i].meta;
+    for (i = 0; i < s->class_count; i++) {
+        if (strcmp(s->classes[i].name, name) == 0)
+            return s->classes[i].meta;
     }
     return NULL;
 }
 
-void *chm_objc_sel_registerName(const char *name)
+static void *sel_register_impl(const char *name)
 {
+    chm_session *s = g_active_session;
     int i;
 
     if (!name)
         return NULL;
-    for (i = 0; i < g_sel_count; i++) {
-        if (strcmp(g_sels[i], name) == 0)
-            return g_sels[i];
+    if (!s)
+        return (void *)name;
+    for (i = 0; i < s->sel_count; i++) {
+        if (strcmp(s->sels[i], name) == 0)
+            return s->sels[i];
     }
-    if (g_sel_count < CHM_MAX_SELS) {
+    if (s->sel_count < CHM_MAX_SELS) {
         char *copy = strdup(name);
 
-        if (!copy)
-            return (void *)name;
-        g_sels[g_sel_count] = copy;
-        g_sel_count++;
-        return copy;
+        if (copy) {
+            s->sels[s->sel_count++] = copy;
+            return copy;
+        }
     }
     return (void *)name;
 }
 
-static void *chm_method_imp(chm_method_list *ml, const char *sel)
+static void *get_class_impl(const char *name)
 {
-    uint32_t header;
-    uint32_t entsize;
-    uint32_t i;
-    uint8_t *base;
-
-    if (!ml || !sel)
-        return NULL;
-    header = ml->entsize_and_flags;
-    base = (uint8_t *)ml + sizeof(chm_method_list);
-
-    if (header & CHM_METHOD_LIST_SMALL) {
-        chm_small_method *m = (chm_small_method *)base;
-
-        for (i = 0; i < ml->count; i++) {
-            const char *name = (const char *)&m[i] + m[i].name_offset;
-
-            if (strcmp(name, sel) == 0)
-                return (void *)((uint8_t *)&m[i] + m[i].imp_offset);
-        }
-        return NULL;
-    }
-
-    entsize = header & ~0x3u;
-    if (entsize < sizeof(chm_classic_method))
-        entsize = sizeof(chm_classic_method);
-    for (i = 0; i < ml->count; i++) {
-        chm_classic_method *e = (chm_classic_method *)(base + (size_t)i * entsize);
-
-        if (e->name && strcmp(e->name, sel) == 0)
-            return e->imp;
-    }
-    return NULL;
+    return chm_objc_session_get_class(g_active_session, name);
 }
 
-void *chm_objc_lookup_imp(void *self, const char *sel)
+static void *get_metaclass_impl(const char *name)
 {
-    void *isa;
-    chm_objc_class *c;
-    int depth = 0;
-
-    if (!self || !sel)
-        return NULL;
-    isa = *(void **)self;
-    c = (chm_objc_class *)isa;
-    while (c && depth < 64) {
-        void *imp = chm_method_imp(chm_class_methods(c), sel);
-
-        if (imp)
-            return imp;
-        c = (chm_objc_class *)c->superclass;
-        depth++;
-    }
-    return NULL;
+    return chm_objc_session_get_metaclass(g_active_session, name);
 }
 
-static void *chm_send6(void *imp, void *self, const char *sel, uint64_t a1, uint64_t a2,
-                       uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6)
+static void *object_get_class_impl(void *obj)
 {
-    typedef void *(*fn6)(void *, const char *, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
-
-    if (!imp)
-        return NULL;
-    return ((fn6)imp)(self, sel, a1, a2, a3, a4, a5, a6);
+    return obj ? *(void **)obj : NULL;
 }
 
-static void *chm_objc_msgSend(void *self, const char *sel, uint64_t a1, uint64_t a2,
-                              uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6)
+static void *alloc_impl(void *cls)
 {
-    void *resolved = chm_objc_lookup_imp(self, sel);
-    if (!resolved)
-        resolved = chm_cfstr_builtin(self, sel);
-    if (!resolved)
-        resolved = chm_objc_missing_method(self, sel);
-    return chm_send6(resolved, self, sel, a1, a2, a3, a4, a5, a6);
-}
-
-static void *chm_objc_msgSendSuper2(void *super_ptr, const char *sel, uint64_t a1, uint64_t a2,
-                                    uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6)
-{
-    void **s = (void **)super_ptr;
-    void *recv;
-    chm_objc_class *c;
-    int depth = 0;
-
-    if (!s)
-        return NULL;
-    recv = s[0];
-    c = (chm_objc_class *)s[1];
-    if (c)
-        c = (chm_objc_class *)c->superclass;
-    while (c && depth < 64) {
-        void *imp = chm_method_imp(chm_class_methods(c), sel);
-
-        if (imp)
-            return chm_send6(imp, recv, sel, a1, a2, a3, a4, a5, a6);
-        c = (chm_objc_class *)c->superclass;
-        depth++;
-    }
-    return NULL;
-}
-
-static void *chm_objc_alloc(void *cls)
-{
-    size_t size = chm_class_size((chm_objc_class *)cls);
+    size_t sz = class_size((chm_objc_class *)cls);
     void *obj;
 
-    if (size < 16)
-        size = 16;
-    obj = calloc(1, size);
+    if (sz < 16)
+        sz = 16;
+    obj = calloc(1, sz);
     if (obj)
         *(void **)obj = cls;
     return obj;
 }
 
-static void *chm_objc_allocWithZone(void *cls, void *zone)
+static void *alloc_zone_impl(void *cls, void *zone)
 {
     (void)zone;
-    return chm_objc_alloc(cls);
+    return alloc_impl(cls);
 }
 
-static void *chm_objc_retain(void *obj)
+static void *retain_impl(void *obj)
 {
     return obj;
 }
 
-static void chm_objc_release(void *obj)
+static void release_impl(void *obj)
 {
     (void)obj;
 }
 
-static void *chm_objc_retainBlock(void *obj)
-{
-    return obj;
-}
-
-static void chm_objc_storeStrong(void **slot, void *obj)
+static void store_strong_impl(void **slot, void *obj)
 {
     if (slot)
         *slot = obj;
 }
 
-static int chm_objc_sync_enter(void *obj)
+static void *autorelease_push_impl(void)
+{
+    return NULL;
+}
+
+static void autorelease_pop_impl(void *ctx)
+{
+    (void)ctx;
+}
+
+static void *block_copy_impl(void *b)
+{
+    return b;
+}
+
+static void block_release_impl(void *b)
+{
+    (void)b;
+}
+
+static void block_object_assign_impl(void *dst, void *src, int flags)
+{
+    (void)flags;
+    if (dst)
+        *(void **)dst = src;
+}
+
+static void block_object_dispose_impl(void *obj, int flags)
 {
     (void)obj;
-    return 0;
+    (void)flags;
 }
 
-static int chm_objc_sync_exit(void *obj)
+void *chm_objc_msgSend_bridge(void)
 {
-    (void)obj;
-    return 0;
+    return (void *)chm_objc_msgSend_trampoline;
 }
 
-void chm_objc_call_loads(chm_report *r)
+void *chm_objc_msgSendSuper2_bridge(void)
 {
-    int i;
-    int called = 0;
-
-    for (i = 0; i < g_class_count; i++) {
-        chm_objc_class *meta = g_classes[i].meta;
-        void *imp;
-
-        if (!meta)
-            continue;
-        imp = chm_method_imp(chm_class_methods(meta), "load");
-        if (imp) {
-            typedef void (*load_fn)(void *, const char *);
-
-            ((load_fn)imp)(g_classes[i].cls, "load");
-            called++;
-        }
-    }
-    chm_report_add(r, "objc: +load %d", called);
+    return (void *)chm_objc_msgSendSuper2_trampoline;
 }
 
-void *chm_objc_block_isa(void)
-{
-    return g_block_isa;
-}
-
-void *chm_objc_resolve_import(const char *name)
+void *chm_objc_session_lookup(chm_session *s, const char *name)
 {
     static const struct {
         const char *name;
         void *addr;
     } table[] = {
-        { "_objc_msgSend", (void *)chm_objc_msgSend },
-        { "_objc_msgSendSuper2", (void *)chm_objc_msgSendSuper2 },
-        { "_objc_getClass", (void *)chm_objc_getClass },
-        { "_objc_lookUpClass", (void *)chm_objc_getClass },
-        { "_objc_getMetaClass", (void *)chm_objc_getMetaClass },
-        { "_objc_sel_registerName", (void *)chm_objc_sel_registerName },
-        { "_sel_registerName", (void *)chm_objc_sel_registerName },
-        { "_objc_retain", (void *)chm_objc_retain },
-        { "_objc_release", (void *)chm_objc_release },
-        { "_objc_autorelease", (void *)chm_objc_retain },
-        { "_objc_autoreleaseReturnValue", (void *)chm_objc_retain },
-        { "_objc_retainAutoreleasedReturnValue", (void *)chm_objc_retain },
-        { "_objc_retainAutorelease", (void *)chm_objc_retain },
-        { "_objc_retainAutoreleaseReturnValue", (void *)chm_objc_retain },
-        { "_objc_unsafeClaimAutoreleasedReturnValue", (void *)chm_objc_retain },
-        { "_objc_claimAutoreleasedReturnValue", (void *)chm_objc_retain },
-        { "_objc_storeStrong", (void *)chm_objc_storeStrong },
-        { "_objc_retainBlock", (void *)chm_objc_retainBlock },
-        { "_objc_alloc", (void *)chm_objc_alloc },
-        { "_objc_allocWithZone", (void *)chm_objc_allocWithZone },
-        { "_objc_opt_new", (void *)chm_objc_alloc },
-        { "_objc_sync_enter", (void *)chm_objc_sync_enter },
-        { "_objc_sync_exit", (void *)chm_objc_sync_exit },
+        { "_objc_msgSend", (void *)chm_objc_msgSend_trampoline },
+        { "_objc_msgSendSuper2", (void *)chm_objc_msgSendSuper2_trampoline },
+        { "_objc_getClass", (void *)get_class_impl },
+        { "_objc_lookUpClass", (void *)get_class_impl },
+        { "_objc_getMetaClass", (void *)get_metaclass_impl },
+        { "_object_getClass", (void *)object_get_class_impl },
+        { "_objc_sel_registerName", (void *)sel_register_impl },
+        { "_sel_registerName", (void *)sel_register_impl },
+        { "_objc_alloc", (void *)alloc_impl },
+        { "_objc_alloc_init", (void *)alloc_impl },
+        { "_objc_allocWithZone", (void *)alloc_zone_impl },
+        { "_objc_opt_new", (void *)alloc_impl },
+        { "_objc_retain", (void *)retain_impl },
+        { "_objc_release", (void *)release_impl },
+        { "_objc_autorelease", (void *)retain_impl },
+        { "_objc_autoreleaseReturnValue", (void *)retain_impl },
+        { "_objc_retainAutoreleasedReturnValue", (void *)retain_impl },
+        { "_objc_retainAutorelease", (void *)retain_impl },
+        { "_objc_retainAutoreleaseReturnValue", (void *)retain_impl },
+        { "_objc_unsafeClaimAutoreleasedReturnValue", (void *)retain_impl },
+        { "_objc_claimAutoreleasedReturnValue", (void *)retain_impl },
+        { "_objc_retainBlock", (void *)block_copy_impl },
+        { "_objc_storeStrong", (void *)store_strong_impl },
+        { "_objc_autoreleasePoolPush", (void *)autorelease_push_impl },
+        { "_objc_autoreleasePoolPop", (void *)autorelease_pop_impl },
+        { "__Block_copy", (void *)block_copy_impl },
+        { "__Block_release", (void *)block_release_impl },
+        { "__Block_object_assign", (void *)block_object_assign_impl },
+        { "__Block_object_dispose", (void *)block_object_dispose_impl },
+        { "__objc_empty_cache", (void *)g_empty_cache },
+        { "__NSConcreteStackBlock", (void *)g_block_isa },
+        { "__NSConcreteGlobalBlock", (void *)g_block_isa },
+        { "__NSConcreteMallocBlock", (void *)g_block_isa },
+        { "___CFConstantStringClassReference", (void *)g_cfstr_isa },
         { NULL, NULL }
     };
     int i;
 
+    if (!name)
+        return NULL;
     for (i = 0; table[i].name; i++) {
         if (strcmp(table[i].name, name) == 0)
             return table[i].addr;
     }
-    if (strcmp(name, "__NSConcreteStackBlock") == 0 || strcmp(name, "__NSConcreteGlobalBlock") == 0 ||
-        strcmp(name, "__NSConcreteMallocBlock") == 0)
-        return g_block_isa;
     if (strncmp(name, "_OBJC_CLASS_$_", 14) == 0) {
-        void *cls = chm_objc_getClass(name + 14);
+        void *c = chm_objc_session_get_class(s, name + 14);
 
-        if (cls)
-            return cls;
-        return chm_objc_empty_class(name + 14);
+        return c ? c : chm_foundation_lookup_class(name + 14);
     }
     if (strncmp(name, "_OBJC_METACLASS_$_", 18) == 0) {
-        void *meta = chm_objc_getMetaClass(name + 18);
+        void *m = chm_objc_session_get_metaclass(s, name + 18);
 
-        if (meta)
-            return meta;
-        return chm_objc_empty_class(name + 18);
+        return m ? m : chm_foundation_lookup_metaclass(name + 18);
     }
     return NULL;
 }
