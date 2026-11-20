@@ -1,3 +1,4 @@
+extern void *chm_cfstr_builtin(void *self, const char *sel);
 #include "chm.h"
 #include "chm_int.h"
 
@@ -278,7 +279,10 @@ static void *chm_send6(void *imp, void *self, const char *sel, uint64_t a1, uint
 static void *chm_objc_msgSend(void *self, const char *sel, uint64_t a1, uint64_t a2,
                               uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6)
 {
-    return chm_send6(chm_objc_lookup_imp(self, sel), self, sel, a1, a2, a3, a4, a5, a6);
+    void *resolved = chm_objc_lookup_imp(self, sel);
+    if (!resolved)
+        resolved = chm_cfstr_builtin(self, sel);
+    return chm_send6(resolved, self, sel, a1, a2, a3, a4, a5, a6);
 }
 
 static void *chm_objc_msgSendSuper2(void *super_ptr, const char *sel, uint64_t a1, uint64_t a2,

@@ -1,3 +1,6 @@
+extern void *chm_cfstr_resolve(const char *name);
+extern int chm_cfstr_is_const_name(const char *name);
+extern void *chm_cfstr_const(const char *name);
 #include "chm.h"
 #include "chm_int.h"
 #include "chm_rt.h"
@@ -230,6 +233,9 @@ static void *locate_import(const char *name)
             return e->addr;
     }
 
+    resolved = chm_cfstr_resolve(name);
+    if (resolved)
+        return resolved;
     resolved = chm_dylib_lookup(name);
     if (resolved)
         return resolved;
@@ -245,6 +251,8 @@ static void *locate_import(const char *name)
         if (strcmp(data[i].name, name) == 0)
             return data[i].addr;
     }
+    if (chm_cfstr_is_const_name(name))
+        return chm_cfstr_const(name);
     return NULL;
 }
 

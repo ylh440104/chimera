@@ -24,6 +24,7 @@ static int g_queue_tail;
 static int g_queue_count;
 static char g_main_q[64];
 static char g_global_q[64];
+static char g_queue_attr_concurrent[64];
 
 static int chm_dispatch_async(void *queue, chm_block *block)
 {
@@ -126,6 +127,8 @@ void *chm_dispatch_resolve_import(const char *name)
         if (strcmp(table[i].name, name) == 0)
             return table[i].addr;
     }
+    if (strcmp(name, "__dispatch_queue_attr_concurrent") == 0)
+        return g_queue_attr_concurrent;
     if (strcmp(name, "__dispatch_main_q") == 0)
         return g_main_q;
     return NULL;
