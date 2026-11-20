@@ -28,6 +28,7 @@ static char g_cfstr_class[64];
 static char g_empty_cache[64];
 static char g_os_activity_current[64];
 static char g_nsarray0[128];
+static char g_nsdictionary0[128];
 static char g_ehtype_nsexception[64];
 
 int chm_cfstr_owns(void *p)
@@ -279,6 +280,8 @@ void *chm_cfstr_resolve(const char *name)
         return g_os_activity_current;
     if (strcmp(name, "___NSArray0__") == 0)
         return g_nsarray0;
+    if (strcmp(name, "___NSDictionary0__") == 0)
+        return g_nsdictionary0;
     if (strcmp(name, "_OBJC_EHTYPE_$_NSException") == 0)
         return g_ehtype_nsexception;
     if (strcmp(name, "___CFConstantStringClassReference") == 0)
