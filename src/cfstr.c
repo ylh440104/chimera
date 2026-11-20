@@ -6,7 +6,7 @@
 #include <string.h>
 
 #define CHM_CFSTR_MAGIC 0x4346535452ull
-#define CHM_CFSTR_MAX 256
+#define CHM_CFSTR_MAX 512
 
 typedef struct {
     uint64_t magic;
@@ -70,19 +70,19 @@ int chm_cfstr_is_const_name(const char *name)
 {
     if (!name)
         return 0;
-    if (strncmp(name, "_kCF", 4) == 0)
+    if (strncmp(name, "_OBJC_", 6) == 0)
+        return 0;
+    if (strstr(name, "Concrete") || strstr(name, "Block"))
+        return 0;
+    if (strncmp(name, "_k", 2) == 0)
         return 1;
-    if (strncmp(name, "_kUT", 4) == 0)
+    if (strncmp(name, "_NS", 3) == 0)
         return 1;
-    if (strncmp(name, "_kSec", 5) == 0)
+    if (strncmp(name, "_UI", 3) == 0)
         return 1;
-    if (strncmp(name, "_CF", 3) == 0 && strstr(name, "String"))
+    if (strncmp(name, "_CF", 3) == 0)
         return 1;
-    if (strncmp(name, "_NS", 3) == 0 && strstr(name, "Key"))
-        return 1;
-    if (strncmp(name, "_NS", 3) == 0 && strstr(name, "Mode"))
-        return 1;
-    if (strncmp(name, "_NS", 3) == 0 && strstr(name, "Notification"))
+    if (strncmp(name, "_CG", 3) == 0)
         return 1;
     return 0;
 }
@@ -232,6 +232,15 @@ static void CFRelease(void *s)
     (void)s;
 }
 
+static int chm_objc_personality(void)
+{
+    return 5;
+}
+
+static void chm_stub_binder(void)
+{
+}
+
 void *chm_cfstr_resolve(const char *name)
 {
     static const struct {
@@ -246,6 +255,8 @@ void *chm_cfstr_resolve(const char *name)
         { "_CFHash", (void *)CFHash },
         { "_CFRetain", (void *)CFRetain },
         { "_CFRelease", (void *)CFRelease },
+        { "___objc_personality_v0", (void *)chm_objc_personality },
+        { "dyld_stub_binder", (void *)chm_stub_binder },
         { NULL, NULL }
     };
     int i;
@@ -254,5 +265,7 @@ void *chm_cfstr_resolve(const char *name)
         if (strcmp(table[i].name, name) == 0)
             return table[i].addr;
     }
+    if (strcmp(name, "___CFConstantStringClassReference") == 0)
+        return g_cfstr_class;
     return NULL;
 }
