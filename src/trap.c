@@ -25,6 +25,8 @@ static int g_installed;
 
 static uint64_t g_regs[4];
 
+static uint64_t g_self_base;
+
 static void handler(int sig, siginfo_t *info, void *ctx)
 {
     ucontext_t *uc = ctx;
@@ -66,6 +68,7 @@ void chm_trap_install(void)
     ss.ss_size = sizeof(g_altstack);
     ss.ss_flags = 0;
     sigaltstack(&ss, NULL);
+    g_self_base = (uint64_t)(uintptr_t)&chm_trap_install;
     g_installed = 1;
 }
 
@@ -154,12 +157,12 @@ int chm_session_execute(chm_session *s, chm_image *img, int argc, char **argv)
         if (dladdr((void *)(uintptr_t)g_pc, &di) && di.dli_sname)
             sym = (void *)di.dli_sname;
         snprintf(g_fault, sizeof(g_fault),
-                 "signal %d fault 0x%llx pc 0x%llx lr 0x%llx sp 0x%llx x0 0x%llx x1 0x%llx pc_rel 0x%llx lr_rel 0x%llx in %s",
+                 "signal %d fault 0x%llx pc 0x%llx lr 0x%llx sp 0x%llx x0 0x%llx x1 0x%llx selfoff 0x%llx lroff 0x%llx in %s",
                  g_signal, (unsigned long long)g_far, (unsigned long long)g_pc,
                  (unsigned long long)g_lr, (unsigned long long)g_sp,
                  (unsigned long long)g_regs[0], (unsigned long long)g_regs[1],
-                 (unsigned long long)(g_pc - (uint64_t)(uintptr_t)&chm_session_execute),
-                 (unsigned long long)(g_lr - (uint64_t)(uintptr_t)&chm_session_execute),
+                 (unsigned long long)(g_pc - g_self_base),
+                 (unsigned long long)(g_lr - g_self_base),
                  sym ? (const char *)sym : "unknown");
     }
     chm_session_log(s, "%s", g_fault);
