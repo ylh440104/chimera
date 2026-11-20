@@ -27,6 +27,7 @@ typedef struct {
     char path[1024];
     uint64_t base;
     int ok;
+    int exports;
 } chm_dylib_slot;
 
 static chm_dylib_slot g_slots[CHM_DYLIB_MAX];
@@ -132,14 +133,26 @@ static int chm_dylib_exports(chm_dylib_slot *s)
     const struct chm_linkedit_data_command *trie = chm_exports_trie(&s->img);
     const uint8_t *start;
     const uint8_t *end;
+    int before = g_export_count;
 
-    if (!trie)
+    if (trie) {
+        if ((uint64_t)trie->dataoff + trie->datasize > s->img.filesize)
+            return -1;
+        start = (const uint8_t *)s->img.file + trie->dataoff;
+        end = start + trie->datasize;
+        chm_trie_walk(start, end, start, "", s->base, 0);
+    } else if (s->img.dyld_info && s->img.dyld_info->export_size) {
+        const struct chm_dyld_info_command *di = s->img.dyld_info;
+
+        if ((uint64_t)di->export_off + di->export_size > s->img.filesize)
+            return -1;
+        start = (const uint8_t *)s->img.file + di->export_off;
+        end = start + di->export_size;
+        chm_trie_walk(start, end, start, "", s->base, 0);
+    } else {
         return 0;
-    if ((uint64_t)trie->dataoff + trie->datasize > s->img.filesize)
-        return -1;
-    start = (const uint8_t *)s->img.file + trie->dataoff;
-    end = start + trie->datasize;
-    chm_trie_walk(start, end, start, "", s->base, 0);
+    }
+    s->exports = g_export_count - before;
     return 0;
 }
 
@@ -268,5 +281,12 @@ int chm_dylib_load_all(chm_image *main_img, const char *exe_path, chm_report *r)
     }
 
     chm_report_add(r, "dylib: 装 %d, 缺 %d, 导出 %d", loaded, missing, g_export_count);
+    for (i = 0; i < (uint32_t)g_slot_count && i < 4; i++) {
+        const char *name = strrchr(g_slots[i].path, '/');
+
+        name = name ? name + 1 : g_slots[i].path;
+        chm_report_add(r, "dylib: %s 导出 %d %s", name, g_slots[i].exports,
+                       g_slots[i].ok ? "ok" : "half");
+    }
     return loaded;
 }
