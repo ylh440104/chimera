@@ -245,7 +245,12 @@ typedef struct {
     uint32_t ordinal;
 } chm_dylib;
 
-typedef struct {
+struct chm_image;
+
+typedef int (*chm_bind_resolver)(const struct chm_image *, int32_t, const char *, bool, uint64_t *, void *);
+typedef void (*chm_bind_observer)(const struct chm_image *, uint32_t, uint64_t, int32_t, const char *, uint64_t, bool, bool, void *);
+
+typedef struct chm_image {
     void *file;
     size_t filesize;
     struct chm_mach_header *hdr;
@@ -267,6 +272,18 @@ typedef struct {
     uint64_t vm_max;
     uint32_t nfixup_bind;
     uint32_t nfixup_missing;
+    uint32_t nfixup_rebase;
+    uint32_t nfixup_weak;
+    uint32_t cryptid;
+    void *reservation;
+    size_t reservation_size;
+    bool fixed;
+    bool executable;
+    chm_bind_resolver resolver;
+    chm_bind_observer observer;
+    void *resolver_context;
+    void *observer_context;
+    char error[256];
 } chm_image;
 
 int chm_open(chm_image *img, const char *path);
@@ -274,6 +291,12 @@ void chm_close(chm_image *img);
 int chm_map(chm_image *img, uint64_t slide);
 int chm_map_default(chm_image *img);
 int chm_fixup(chm_image *img);
+int chm_fixup_at(chm_image *img, uint64_t slide);
+int chm_bind_image(chm_image *img);
+int chm_protect(chm_image *img);
+void chm_unmap(chm_image *img);
+int chm_fail(chm_image *img, const char *fmt, ...);
+int chm_apply_fixups(chm_image *img);
 void *chm_resolve_import(const char *name);
 void *chm_sym(chm_image *img, const char *name);
 void chm_dump(chm_image *img, FILE *out);

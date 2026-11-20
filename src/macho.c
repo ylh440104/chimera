@@ -1,634 +1,510 @@
+#define _GNU_SOURCE
 #include "chm.h"
 
+#include <errno.h>
 #include <fcntl.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
-static void chm_name(char *dst, size_t cap, const char *src, size_t len)
-{
-    size_t n = len < cap - 1 ? len : cap - 1;
+#ifndef MAP_FIXED_NOREPLACE
+#define MAP_FIXED_NOREPLACE 0x100000
+#endif
 
-    memcpy(dst, src, n);
-    dst[n] = 0;
+#define CHM_MAX_IMAGE_SIZE (UINT64_C(1) << 30)
+#define CHM_MAX_SYMBOLS 1048576u
+
+_Static_assert(sizeof(struct chm_mach_header) == 32, "mach header size");
+_Static_assert(sizeof(struct chm_segment_command) == 72, "segment size");
+_Static_assert(sizeof(struct chm_section_64) == 80, "section size");
+_Static_assert(sizeof(struct chm_nlist_64) == 16, "symbol size");
+
+int chm_fail(chm_image *img, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(img->error, sizeof(img->error), fmt, ap);
+    va_end(ap);
+    return -1;
 }
 
-static uint64_t chm_uleb(const uint8_t **pp, const uint8_t *end)
+static bool file_range(const chm_image *img, uint64_t off, uint64_t size)
 {
-    const uint8_t *p = *pp;
-    uint64_t v = 0;
-    unsigned shift = 0;
+    return off <= img->filesize && size <= img->filesize - off;
+}
 
-    while (p < end) {
-        uint8_t b = *p++;
+static int bounded_name(chm_image *img, char *out, size_t cap, const void *data, size_t size)
+{
+    const char *end = memchr(data, 0, size);
+    if (!end)
+        return chm_fail(img, "unterminated name");
+    size_t n = (size_t)(end - (const char *)data);
+    if (n >= cap)
+        return chm_fail(img, "name exceeds %zu bytes", cap - 1);
+    memcpy(out, data, n + 1);
+    return 0;
+}
 
-        v |= (uint64_t)(b & 0x7f) << shift;
-        if (!(b & 0x80))
-            break;
-        shift += 7;
+static void fixed_name(char out[17], const char in[16])
+{
+    memcpy(out, in, 16);
+    out[16] = 0;
+}
+
+static int parse_segment(chm_image *img, const uint8_t *p, uint32_t size)
+{
+    struct chm_segment_command sc;
+    if (size < sizeof(sc))
+        return chm_fail(img, "short segment command");
+    memcpy(&sc, p, sizeof(sc));
+    if (sc.nsects > (size - sizeof(sc)) / sizeof(struct chm_section_64))
+        return chm_fail(img, "section table exceeds command");
+    if (img->nsegs == CHM_MAX_SEGS)
+        return chm_fail(img, "too many segments");
+    if (sc.vmsize > UINT64_MAX - sc.vmaddr || sc.filesize > sc.vmsize ||
+        !file_range(img, sc.fileoff, sc.filesize))
+        return chm_fail(img, "invalid segment range");
+    if ((sc.initprot & ~7u) || (sc.maxprot & ~7u) || (sc.initprot & ~sc.maxprot))
+        return chm_fail(img, "invalid segment permissions");
+    if (strncmp((const char *)sc.segname, "__PAGEZERO", 16) != 0 && (sc.vmaddr & 0xfffull))
+        return chm_fail(img, "segment address is not page aligned");
+    chm_segment *s = &img->segs[img->nsegs++];
+    fixed_name(s->name, sc.segname);
+    s->vmaddr = sc.vmaddr;
+    s->vmsize = sc.vmsize;
+    s->fileoff = sc.fileoff;
+    s->filesize = sc.filesize;
+    s->initprot = sc.initprot;
+    s->maxprot = sc.maxprot;
+    s->flags = sc.flags;
+    s->nsects = sc.nsects;
+    if (sc.nsects) {
+        s->sects = calloc(sc.nsects, sizeof(*s->sects));
+        if (!s->sects)
+            return chm_fail(img, "section allocation failed");
     }
-    *pp = p;
-    return v;
-}
-
-static int64_t chm_sleb(const uint8_t **pp, const uint8_t *end)
-{
-    const uint8_t *p = *pp;
-    int64_t v = 0;
-    unsigned shift = 0;
-    uint8_t b = 0;
-
-    while (p < end) {
-        b = *p++;
-        v |= (int64_t)(b & 0x7f) << shift;
-        shift += 7;
-        if (!(b & 0x80))
-            break;
+    for (uint32_t i = 0; i < sc.nsects; ++i) {
+        struct chm_section_64 sec;
+        memcpy(&sec, p + sizeof(sc) + i * sizeof(sec), sizeof(sec));
+        if (sec.addr < sc.vmaddr || sec.addr - sc.vmaddr > sc.vmsize ||
+            sec.size > sc.vmsize - (sec.addr - sc.vmaddr))
+            return chm_fail(img, "section outside segment");
+        uint32_t type = sec.flags & 0xffu;
+        bool zerofill = type == 1 || type == 12 || type == 18;
+        if (!zerofill && sec.size &&
+            (!file_range(img, sec.offset, sec.size) || sec.offset < sc.fileoff ||
+             sec.offset - sc.fileoff > sc.filesize ||
+             sec.size > sc.filesize - (sec.offset - sc.fileoff)))
+            return chm_fail(img, "section outside file-backed range");
+        chm_section *dst = &s->sects[i];
+        fixed_name(dst->sect, sec.sectname);
+        fixed_name(dst->seg, sec.segname);
+        dst->addr = sec.addr;
+        dst->size = sec.size;
+        dst->offset = sec.offset;
+        dst->flags = sec.flags;
     }
-    if ((b & 0x40) && shift < 64)
-        v |= -((int64_t)1 << shift);
-    *pp = p;
-    return v;
+    if (!strcmp(s->name, "__PAGEZERO")) {
+        if (sc.filesize || sc.initprot || sc.vmaddr)
+            return chm_fail(img, "invalid PAGEZERO segment");
+    } else if (sc.vmsize) {
+        if (sc.vmaddr < img->vm_min)
+            img->vm_min = sc.vmaddr;
+        if (sc.vmaddr + sc.vmsize > img->vm_max)
+            img->vm_max = sc.vmaddr + sc.vmsize;
+    }
+    return 0;
 }
 
-static int chm_prot(uint32_t p)
+static int parse_symbols(chm_image *img, const uint8_t *p, uint32_t size)
 {
-    int prot = 0;
+    struct chm_symtab_command st;
+    if (size < sizeof(st) || img->strtab)
+        return chm_fail(img, "invalid or duplicate symbol table");
+    memcpy(&st, p, sizeof(st));
+    if (st.nsyms > CHM_MAX_SYMBOLS ||
+        !file_range(img, st.symoff, (uint64_t)st.nsyms * sizeof(struct chm_nlist_64)) ||
+        !file_range(img, st.stroff, st.strsize))
+        return chm_fail(img, "invalid symbol table range");
+    img->strtab = (const char *)img->file + st.stroff;
+    img->strsize = st.strsize;
+    img->nsyms = st.nsyms;
+    if (st.nsyms) {
+        img->syms = calloc(st.nsyms, sizeof(*img->syms));
+        if (!img->syms)
+            return chm_fail(img, "symbol allocation failed");
+    }
+    for (uint32_t i = 0; i < st.nsyms; ++i) {
+        struct chm_nlist_64 nl;
+        memcpy(&nl, (const uint8_t *)img->file + st.symoff + i * sizeof(nl), sizeof(nl));
+        chm_symbol *s = &img->syms[i];
+        if (nl.n_strx >= st.strsize)
+            return chm_fail(img, "symbol string offset out of range");
+        const char *name = img->strtab + nl.n_strx;
+        const char *end = memchr(name, 0, st.strsize - nl.n_strx);
+        if (!end)
+            return chm_fail(img, "unterminated symbol");
+        size_t n = (size_t)(end - name);
+        if (n >= sizeof(s->name))
+            return chm_fail(img, "symbol name too long");
+        memcpy(s->name, name, n + 1);
+        s->type = nl.n_type;
+        s->sect = nl.n_sect;
+        s->desc = nl.n_desc;
+        s->value = nl.n_value;
+    }
+    return 0;
+}
 
-    if (p & 1)
-        prot |= PROT_READ;
-    if (p & 2)
-        prot |= PROT_WRITE;
-    if (p & 4)
-        prot |= PROT_EXEC;
-    return prot ? prot : PROT_READ;
+static int parse_commands(chm_image *img)
+{
+    const struct chm_mach_header *h = img->hdr;
+    if (h->magic != CHM_MH_MAGIC_64 || h->cputype != CHM_CPU_ARM64)
+        return chm_fail(img, "only thin little-endian arm64 Mach-O is supported");
+    if ((h->cpusubtype & 0xffffffu) == 2)
+        return chm_fail(img, "arm64e/PAC is not supported");
+    if (h->filetype != CHM_MH_EXECUTE && h->filetype != CHM_MH_DYLIB && h->filetype != CHM_MH_BUNDLE)
+        return chm_fail(img, "unsupported Mach-O file type %u", h->filetype);
+    if (!file_range(img, sizeof(*h), h->sizeofcmds) || h->ncmds > h->sizeofcmds / 8)
+        return chm_fail(img, "invalid load command table");
+    size_t off = sizeof(*h);
+    size_t end = off + h->sizeofcmds;
+    for (uint32_t i = 0; i < h->ncmds; ++i) {
+        struct chm_load_command lc;
+        if (end - off < sizeof(lc))
+            return chm_fail(img, "truncated load command");
+        const uint8_t *p = (const uint8_t *)img->file + off;
+        memcpy(&lc, p, sizeof(lc));
+        if (lc.cmdsize < sizeof(lc) || lc.cmdsize > end - off || lc.cmdsize % 8)
+            return chm_fail(img, "invalid load command size");
+        switch (lc.cmd) {
+        case CHM_LC_SEGMENT_64:
+            if (parse_segment(img, p, lc.cmdsize))
+                return -1;
+            break;
+        case CHM_LC_SYMTAB:
+            if (parse_symbols(img, p, lc.cmdsize))
+                return -1;
+            break;
+        case CHM_LC_LOAD_DYLIB:
+        case CHM_LC_LOAD_WEAK_DYLIB:
+        case CHM_LC_REEXPORT_DYLIB:
+        case CHM_LC_LAZY_LOAD_DYLIB:
+        case CHM_LC_LOAD_UPWARD_DYLIB: {
+            struct chm_dylib_command dc;
+            if (lc.cmdsize < sizeof(dc) || img->ndylibs == CHM_MAX_DYLIBS)
+                return chm_fail(img, "invalid or excessive dylib command");
+            memcpy(&dc, p, sizeof(dc));
+            if (dc.name_offset < sizeof(dc) || dc.name_offset >= lc.cmdsize)
+                return chm_fail(img, "invalid dylib name offset");
+            chm_dylib *d = &img->dylibs[img->ndylibs];
+            if (bounded_name(img, d->name, sizeof(d->name), p + dc.name_offset, lc.cmdsize - dc.name_offset))
+                return -1;
+            d->ordinal = ++img->ndylibs;
+            break;
+        }
+        case CHM_LC_DYLD_INFO:
+        case CHM_LC_DYLD_INFO_ONLY: {
+            struct chm_dyld_info_command di;
+            if (lc.cmdsize < sizeof(di) || img->dyld_info)
+                return chm_fail(img, "invalid or duplicate dyld info");
+            memcpy(&di, p, sizeof(di));
+            if (!file_range(img, di.rebase_off, di.rebase_size) ||
+                !file_range(img, di.bind_off, di.bind_size) ||
+                !file_range(img, di.weak_bind_off, di.weak_bind_size) ||
+                !file_range(img, di.lazy_bind_off, di.lazy_bind_size) ||
+                !file_range(img, di.export_off, di.export_size))
+                return chm_fail(img, "dyld stream outside file");
+            img->dyld_info = (struct chm_dyld_info_command *)(uintptr_t)p;
+            break;
+        }
+        case CHM_LC_DYLD_CHAINED_FIXUPS: {
+            struct chm_linkedit_data_command dc;
+            if (lc.cmdsize < sizeof(dc) || img->chained)
+                return chm_fail(img, "invalid or duplicate chained fixups");
+            memcpy(&dc, p, sizeof(dc));
+            if (!file_range(img, dc.dataoff, dc.datasize))
+                return chm_fail(img, "chained fixups outside file");
+            img->chained = (struct chm_linkedit_data_command *)(uintptr_t)p;
+            break;
+        }
+        case CHM_LC_MAIN: {
+            struct chm_entry_point_command ep;
+            if (lc.cmdsize < sizeof(ep) || img->has_entry)
+                return chm_fail(img, "invalid or duplicate entry");
+            memcpy(&ep, p, sizeof(ep));
+            img->entryoff = ep.entryoff;
+            img->has_entry = 1;
+            break;
+        }
+        case CHM_LC_BUILD_VERSION: {
+            struct chm_build_version_command bv;
+            if (lc.cmdsize < sizeof(bv))
+                return chm_fail(img, "short build version");
+            memcpy(&bv, p, sizeof(bv));
+            if (bv.ntools > (lc.cmdsize - sizeof(bv)) / 8)
+                return chm_fail(img, "build tools outside command");
+            img->platform = bv.platform;
+            break;
+        }
+        case 0x21:
+        case 0x2c: {
+            uint32_t v[6] = {0};
+            size_t n = lc.cmd == 0x2c ? 24 : 20;
+            if (lc.cmdsize < n)
+                return chm_fail(img, "short encryption command");
+            memcpy(v, p, n);
+            if (!file_range(img, v[2], v[3]))
+                return chm_fail(img, "encrypted range outside file");
+            img->cryptid |= v[4];
+            break;
+        }
+        default:
+            break;
+        }
+        off += lc.cmdsize;
+    }
+    if (off != end || img->vm_min == UINT64_MAX || img->vm_max <= img->vm_min ||
+        img->vm_max - img->vm_min > CHM_MAX_IMAGE_SIZE)
+        return chm_fail(img, "invalid command or virtual address span");
+    for (uint32_t i = 0; i < img->nsegs; ++i) {
+        const chm_segment *a = &img->segs[i];
+        if (!a->vmsize || !strcmp(a->name, "__PAGEZERO"))
+            continue;
+        for (uint32_t j = i + 1; j < img->nsegs; ++j) {
+            const chm_segment *b = &img->segs[j];
+            if (!b->vmsize || !strcmp(b->name, "__PAGEZERO"))
+                continue;
+            if (a->vmaddr < b->vmaddr + b->vmsize && b->vmaddr < a->vmaddr + a->vmsize)
+                return chm_fail(img, "overlapping segments");
+        }
+    }
+    return 0;
 }
 
 int chm_open(chm_image *img, const char *path)
 {
-    int fd;
-    struct stat st;
-    const uint8_t *p;
-    const uint8_t *end;
-    uint32_t i;
-
+    if (!img)
+        return -1;
     memset(img, 0, sizeof(*img));
     img->vm_min = UINT64_MAX;
-
-    fd = open(path, O_RDONLY);
+    if (!path)
+        return chm_fail(img, "missing path");
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd < 0)
-        return -1;
-    if (fstat(fd, &st) != 0) {
+        return chm_fail(img, "open: %s", strerror(errno));
+    struct stat st;
+    if (fstat(fd, &st) || !S_ISREG(st.st_mode) || st.st_size < 32 || (uint64_t)st.st_size > CHM_MAX_IMAGE_SIZE) {
         close(fd);
-        return -1;
-    }
-    if (st.st_size < (off_t)sizeof(struct chm_mach_header)) {
-        close(fd);
-        return -1;
+        return chm_fail(img, "invalid file size or type");
     }
     img->filesize = (size_t)st.st_size;
     img->file = mmap(NULL, img->filesize, PROT_READ, MAP_PRIVATE, fd, 0);
     close(fd);
     if (img->file == MAP_FAILED) {
         img->file = NULL;
-        return -1;
+        return chm_fail(img, "file mapping failed");
     }
-    img->hdr = (struct chm_mach_header *)img->file;
-    if (img->hdr->magic != CHM_MH_MAGIC_64)
+    img->hdr = img->file;
+    if (parse_commands(img)) {
+        chm_close(img);
         return -1;
-    if (img->hdr->cputype != CHM_CPU_ARM64)
-        return -1;
-
-    p = (const uint8_t *)img->file + sizeof(struct chm_mach_header);
-    end = (const uint8_t *)img->file + img->filesize;
-
-    for (i = 0; i < img->hdr->ncmds; i++) {
-        const struct chm_load_command *lc;
-
-        if ((size_t)(end - p) < sizeof(struct chm_load_command))
-            return -1;
-        lc = (const struct chm_load_command *)p;
-        if (lc->cmdsize < sizeof(struct chm_load_command))
-            return -1;
-        if ((size_t)lc->cmdsize > (size_t)(end - p))
-            return -1;
-
-        switch (lc->cmd) {
-        case CHM_LC_SEGMENT_64: {
-            const struct chm_segment_command *sc = (const struct chm_segment_command *)p;
-            chm_segment *s;
-            uint32_t k;
-
-            if (img->nsegs >= CHM_MAX_SEGS)
-                return -1;
-            if (sizeof(*sc) > lc->cmdsize)
-                return -1;
-            if (sizeof(*sc) + (size_t)sc->nsects * sizeof(struct chm_section_64) > lc->cmdsize)
-                return -1;
-
-            s = &img->segs[img->nsegs++];
-            chm_name(s->name, sizeof(s->name), sc->segname, 16);
-            s->vmaddr = sc->vmaddr;
-            s->vmsize = sc->vmsize;
-            s->fileoff = sc->fileoff;
-            s->filesize = sc->filesize;
-            s->initprot = sc->initprot;
-            s->maxprot = sc->maxprot;
-            s->flags = sc->flags;
-            s->nsects = sc->nsects;
-
-            if (sc->nsects) {
-                const struct chm_section_64 *sec;
-                const struct chm_section_64 *base =
-                    (const struct chm_section_64 *)(p + sizeof(*sc));
-
-                s->sects = calloc(sc->nsects, sizeof(chm_section));
-                if (!s->sects)
-                    return -1;
-                for (k = 0; k < sc->nsects; k++) {
-                    sec = &base[k];
-                    chm_name(s->sects[k].sect, sizeof(s->sects[k].sect), sec->sectname, 16);
-                    chm_name(s->sects[k].seg, sizeof(s->sects[k].seg), sec->segname, 16);
-                    s->sects[k].addr = sec->addr;
-                    s->sects[k].size = sec->size;
-                    s->sects[k].offset = sec->offset;
-                    s->sects[k].flags = sec->flags;
-                }
-            }
-            if (strcmp(s->name, "__PAGEZERO") != 0 && s->vmsize) {
-                if (s->vmaddr < img->vm_min)
-                    img->vm_min = s->vmaddr;
-                if (s->vmaddr + s->vmsize > img->vm_max)
-                    img->vm_max = s->vmaddr + s->vmsize;
-            }
-            break;
-        }
-        case CHM_LC_SYMTAB: {
-            const struct chm_symtab_command *st = (const struct chm_symtab_command *)p;
-            const struct chm_nlist_64 *nl;
-            uint32_t k;
-
-            if (sizeof(*st) > lc->cmdsize)
-                return -1;
-            if ((uint64_t)st->symoff + (uint64_t)st->nsyms * sizeof(struct chm_nlist_64) > img->filesize)
-                return -1;
-            if ((uint64_t)st->stroff + st->strsize > img->filesize)
-                return -1;
-
-            img->strtab = (const char *)img->file + st->stroff;
-            img->strsize = st->strsize;
-            if (st->nsyms) {
-                img->syms = calloc(st->nsyms, sizeof(chm_symbol));
-                if (!img->syms)
-                    return -1;
-                nl = (const struct chm_nlist_64 *)((const uint8_t *)img->file + st->symoff);
-                for (k = 0; k < st->nsyms; k++) {
-                    if (nl[k].n_strx < img->strsize)
-                        snprintf(img->syms[k].name, CHM_MAX_NAME, "%s", img->strtab + nl[k].n_strx);
-                    img->syms[k].type = nl[k].n_type;
-                    img->syms[k].sect = nl[k].n_sect;
-                    img->syms[k].desc = nl[k].n_desc;
-                    img->syms[k].value = nl[k].n_value;
-                }
-            }
-            img->nsyms = st->nsyms;
-            break;
-        }
-        case CHM_LC_LOAD_DYLIB:
-        case CHM_LC_LOAD_WEAK_DYLIB:
-        case CHM_LC_REEXPORT_DYLIB:
-        case CHM_LC_LAZY_LOAD_DYLIB:
-        case CHM_LC_LOAD_UPWARD_DYLIB: {
-            const struct chm_dylib_command *dc = (const struct chm_dylib_command *)p;
-
-            if (img->ndylibs < CHM_MAX_DYLIBS && dc->name_offset < lc->cmdsize) {
-                chm_dylib *d = &img->dylibs[img->ndylibs];
-
-                snprintf(d->name, CHM_MAX_NAME, "%s", (const char *)p + dc->name_offset);
-                d->ordinal = img->ndylibs + 1;
-                img->ndylibs++;
-            }
-            break;
-        }
-        case CHM_LC_DYLD_INFO:
-        case CHM_LC_DYLD_INFO_ONLY:
-            img->dyld_info = (struct chm_dyld_info_command *)(uintptr_t)p;
-            break;
-        case CHM_LC_DYLD_CHAINED_FIXUPS:
-            img->chained = (struct chm_linkedit_data_command *)(uintptr_t)p;
-            break;
-        case CHM_LC_MAIN: {
-            const struct chm_entry_point_command *ep = (const struct chm_entry_point_command *)p;
-
-            img->entryoff = ep->entryoff;
-            img->has_entry = 1;
-            break;
-        }
-        case CHM_LC_BUILD_VERSION: {
-            const struct chm_build_version_command *bv = (const struct chm_build_version_command *)p;
-
-            img->platform = bv->platform;
-            break;
-        }
-        default:
-            break;
-        }
-        p += lc->cmdsize;
     }
     return 0;
 }
 
+void chm_unmap(chm_image *img)
+{
+    if (img->reservation)
+        munmap(img->reservation, img->reservation_size);
+    img->reservation = NULL;
+    img->reservation_size = 0;
+    img->fixed = false;
+    img->executable = false;
+    for (uint32_t i = 0; i < img->nsegs; ++i)
+        img->segs[i].mapped = NULL;
+}
+
 void chm_close(chm_image *img)
 {
-    uint32_t i;
-
-    for (i = 0; i < img->nsegs; i++) {
+    if (!img)
+        return;
+    chm_unmap(img);
+    for (uint32_t i = 0; i < img->nsegs; ++i) {
         free(img->segs[i].sects);
         img->segs[i].sects = NULL;
     }
     free(img->syms);
     img->syms = NULL;
-    if (img->file) {
+    if (img->file)
         munmap(img->file, img->filesize);
-        img->file = NULL;
-    }
-}
-
-void *chm_sym(chm_image *img, const char *name)
-{
-    uint32_t i;
-
-    for (i = 0; i < img->nsyms; i++) {
-        if ((img->syms[i].type & 0x0e) != 0x0e)
-            continue;
-        if (strcmp(img->syms[i].name, name) == 0)
-            return (void *)(uintptr_t)(img->syms[i].value + img->slide);
-    }
-    return NULL;
+    img->file = NULL;
+    img->hdr = NULL;
+    img->strtab = NULL;
+    img->dyld_info = NULL;
+    img->chained = NULL;
+    img->nsegs = img->nsyms = 0;
 }
 
 int chm_map(chm_image *img, uint64_t slide)
 {
-    uint32_t i;
-
+    if (img->reservation)
+        return slide == img->slide ? 0 : chm_fail(img, "cannot change mapped image slide");
+    long native_page = sysconf(_SC_PAGESIZE);
+    if (native_page <= 0)
+        return chm_fail(img, "invalid host page size");
+    uint64_t page = (uint64_t)native_page;
+    uint64_t span = img->vm_max - img->vm_min;
+    if (!img->file || img->vm_min == UINT64_MAX || img->vm_max <= img->vm_min ||
+        span > CHM_MAX_IMAGE_SIZE || img->vm_min % page || slide % page ||
+        img->vm_max > UINT64_MAX - slide - (page - 1))
+        return chm_fail(img, "invalid mapping range or alignment");
+    size_t size = (size_t)((span + page - 1) & ~(page - 1));
+    uint64_t address = img->vm_min + slide;
+    if (!address || address > UINTPTR_MAX - size)
+        return chm_fail(img, "invalid mapping address");
+    void *want = (void *)(uintptr_t)address;
+    void *area = mmap(want, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    if (area == MAP_FAILED)
+        return chm_fail(img, "reserve image: %s", strerror(errno));
+    if (area != want) {
+        munmap(area, size);
+        return chm_fail(img, "kernel did not honor no-replace mapping");
+    }
+    img->reservation = area;
+    img->reservation_size = size;
     img->slide = slide;
-    for (i = 0; i < img->nsegs; i++) {
+    for (uint32_t i = 0; i < img->nsegs; ++i) {
         chm_segment *s = &img->segs[i];
-        void *want;
-        void *got;
-
-        if (!s->vmsize)
+        if (!s->vmsize || !strcmp(s->name, "__PAGEZERO"))
             continue;
-        if (strcmp(s->name, "__PAGEZERO") == 0)
-            continue;
-        if (s->mapped)
-            continue;
-        if (s->filesize > s->vmsize)
-            return -1;
-        if (s->fileoff + s->filesize > img->filesize)
-            return -1;
-
-        want = (void *)(uintptr_t)(s->vmaddr + slide);
-        got = mmap(want, s->vmsize, PROT_READ | PROT_WRITE,
-                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
-        if (got == MAP_FAILED)
-            return -1;
-        if (got != want) {
-            munmap(got, s->vmsize);
-            return -1;
+        if (s->vmaddr % page) {
+            chm_fail(img, "segment %s is not host-page aligned", s->name);
+            goto failed;
+        }
+        uint64_t rounded = (s->vmsize + page - 1) & ~(page - 1);
+        for (uint32_t j = 0; j < img->nsegs; ++j) {
+            const chm_segment *b = &img->segs[j];
+            if (j != i && b->vmsize && b->vmaddr > s->vmaddr && b->vmaddr < s->vmaddr + rounded) {
+                chm_fail(img, "segments share a host page");
+                goto failed;
+            }
+        }
+        void *target = (uint8_t *)area + (size_t)(s->vmaddr - img->vm_min);
+        if (mprotect(target, (size_t)rounded, PROT_READ | PROT_WRITE)) {
+            chm_fail(img, "enable segment writes: %s", strerror(errno));
+            goto failed;
         }
         if (s->filesize)
-            memcpy(got, (const uint8_t *)img->file + s->fileoff, (size_t)s->filesize);
-        s->mapped = got;
+            memcpy(target, (const uint8_t *)img->file + s->fileoff, (size_t)s->filesize);
+        s->mapped = target;
     }
+    img->error[0] = 0;
     return 0;
+failed:
+    chm_unmap(img);
+    return -1;
 }
 
 int chm_map_default(chm_image *img)
 {
-    if (chm_map(img, 0) == 0)
+    if (!chm_map(img, 0))
         return 0;
-    return chm_map(img, 0x40000000ull);
+    return chm_map(img, UINT64_C(0x40000000));
+}
+
+int chm_bind_image(chm_image *img)
+{
+    if (!img->reservation)
+        return chm_fail(img, "image is not mapped");
+    if (img->fixed)
+        return chm_fail(img, "fixups already applied");
+    img->nfixup_bind = img->nfixup_missing = img->nfixup_rebase = img->nfixup_weak = 0;
+    if (img->cryptid || chm_apply_fixups(img)) {
+        if (img->cryptid)
+            chm_fail(img, "encrypted image cannot be bound");
+        chm_unmap(img);
+        return -1;
+    }
+    img->fixed = true;
+    return 0;
 }
 
 int chm_protect(chm_image *img)
 {
-    uint32_t i;
-
-    for (i = 0; i < img->nsegs; i++) {
+    if (!img->reservation || !img->fixed)
+        return chm_fail(img, "cannot protect an unbound image");
+    for (uint32_t i = 0; i < img->nsegs; ++i) {
         chm_segment *s = &img->segs[i];
-        int prot;
-
         if (!s->mapped)
             continue;
-        prot = chm_prot(s->initprot);
-        if (mprotect(s->mapped, s->vmsize, prot) != 0)
+        uint32_t p = s->initprot;
+        if ((p & 6u) == 6u) {
+            chm_fail(img, "writable executable segment rejected");
+            chm_unmap(img);
             return -1;
-    }
-    return 0;
-}
-
-typedef struct {
-    uint32_t name_offset;
-    uint32_t lib_ordinal;
-    int64_t addend;
-} chm_import_desc;
-
-static int chm_read_imports(const struct chm_chained_fixups_header *fh,
-                            chm_import_desc **out, const char **symbols)
-{
-    const uint8_t *base = (const uint8_t *)fh;
-    chm_import_desc *arr;
-    uint32_t i;
-
-    if (fh->symbols_format != 0)
-        return -1;
-    arr = calloc(fh->imports_count ? fh->imports_count : 1, sizeof(*arr));
-    if (!arr)
-        return -1;
-
-    for (i = 0; i < fh->imports_count; i++) {
-        if (fh->imports_format == CHM_IMPORT_FORMAT) {
-            const uint32_t *e = (const uint32_t *)(base + fh->imports_offset) + i;
-
-            arr[i].lib_ordinal = e[0] & 0xff;
-            arr[i].name_offset = (e[0] >> 9) & 0x7fffff;
-            arr[i].addend = 0;
-        } else if (fh->imports_format == CHM_IMPORT_FORMAT_ADDEND) {
-            const uint32_t *e = (const uint32_t *)(base + fh->imports_offset) + i * 2;
-
-            arr[i].lib_ordinal = e[0] & 0xff;
-            arr[i].name_offset = (e[0] >> 9) & 0x7fffff;
-            arr[i].addend = (int32_t)e[1];
-        } else if (fh->imports_format == CHM_IMPORT_FORMAT_ADDEND64) {
-            const uint64_t *e = (const uint64_t *)(base + fh->imports_offset) + i * 2;
-
-            arr[i].lib_ordinal = (uint32_t)(e[0] & 0xffff);
-            arr[i].name_offset = (uint32_t)(e[0] >> 32);
-            arr[i].addend = (int64_t)e[1];
-        } else {
-            free(arr);
+        }
+        if (p & 4)
+            __builtin___clear_cache((char *)s->mapped, (char *)s->mapped + s->vmsize);
+        int prot = (p & 1 ? PROT_READ : 0) | (p & 2 ? PROT_WRITE : 0);
+        if ((p & 4) && !img->nfixup_missing)
+            prot |= PROT_EXEC;
+        if (mprotect(s->mapped, (size_t)s->vmsize, prot)) {
+            chm_fail(img, "protect segment: %s", strerror(errno));
+            chm_unmap(img);
             return -1;
         }
     }
-    *out = arr;
-    *symbols = (const char *)base + fh->symbols_offset;
-    return 0;
-}
-
-static uint64_t chm_bind_value(chm_image *img, uint32_t index, uint32_t count,
-                               const chm_import_desc *imports, const char *symbols,
-                               int64_t addend)
-{
-    const char *name;
-    void *sym;
-
-    if (index >= count) {
-        img->nfixup_missing++;
-        return 0;
-    }
-    name = symbols + imports[index].name_offset;
-    sym = chm_resolve_import(name);
-    if (!sym) {
-        img->nfixup_missing++;
-        return 0;
-    }
-    img->nfixup_bind++;
-    return (uint64_t)(uintptr_t)sym + (uint64_t)imports[index].addend + (uint64_t)addend;
-}
-
-static int chm_apply_chained(chm_image *img)
-{
-    const struct chm_chained_fixups_header *fh;
-    const struct chm_chained_starts_in_image *si;
-    chm_import_desc *imports = NULL;
-    const char *symbols = NULL;
-    uint32_t s;
-
-    if (!img->chained)
-        return 0;
-    if (img->chained->dataoff + img->chained->datasize > img->filesize)
-        return -1;
-
-    fh = (const struct chm_chained_fixups_header *)((const uint8_t *)img->file + img->chained->dataoff);
-    if (chm_read_imports(fh, &imports, &symbols) != 0)
-        return -1;
-    si = (const struct chm_chained_starts_in_image *)((const uint8_t *)fh + fh->starts_offset);
-
-    for (s = 0; s < si->seg_count && s < img->nsegs; s++) {
-        const uint32_t *offsets = (const uint32_t *)((const uint8_t *)si + sizeof(uint32_t));
-        uint32_t off = offsets[s];
-        const struct chm_chained_starts_in_segment *ss;
-        uint8_t *base;
-        uint32_t pg;
-
-        if (!off)
-            continue;
-        ss = (const struct chm_chained_starts_in_segment *)((const uint8_t *)si + off);
-        base = (uint8_t *)(uintptr_t)(img->segs[s].vmaddr + img->slide);
-
-        for (pg = 0; pg < ss->page_count; pg++) {
-            const uint16_t *starts =
-                (const uint16_t *)((const uint8_t *)ss + offsetof(struct chm_chained_starts_in_segment, page_start));
-            uint64_t delta = starts[pg];
-
-            if (delta == 0xffff)
-                continue;
-            for (;;) {
-                uint8_t *loc = base + (uint64_t)pg * ss->page_size + delta;
-                uint64_t raw;
-                uint64_t next = 0;
-                uint64_t val = 0;
-
-                memcpy(&raw, loc, 8);
-                if (ss->pointer_format == CHM_PTR_64 || ss->pointer_format == CHM_PTR_64_OFFSET) {
-                    next = CHM_B64_NEXT(raw);
-                    if (CHM_B64_BIND(raw)) {
-                        val = chm_bind_value(img, (uint32_t)CHM_B64_ORDINAL(raw),
-                                             fh->imports_count, imports, symbols,
-                                             CHM_B64_ADDEND(raw));
-                    } else {
-                        uint64_t target = CHM_B64_TARGET(raw);
-
-                        if (ss->pointer_format == CHM_PTR_64_OFFSET)
-                            target += img->slide;
-                        val = target | (CHM_B64_HIGH8(raw) << 56);
-                    }
-                } else if (ss->pointer_format == CHM_PTR_ARM64E ||
-                           ss->pointer_format == CHM_PTR_ARM64E_USERLAND ||
-                           ss->pointer_format == CHM_PTR_ARM64E_USERLAND24) {
-                    next = CHM_A64E_NEXT(raw);
-                    if (CHM_A64E_BIND(raw)) {
-                        val = chm_bind_value(img, (uint32_t)CHM_A64E_ORDINAL(raw),
-                                             fh->imports_count, imports, symbols,
-                                             CHM_A64E_AUTH(raw) ? 0 : CHM_A64E_ADDEND(raw));
-                    } else if (CHM_A64E_AUTH(raw)) {
-                        val = CHM_A64E_AUTH_TARGET(raw) + img->slide;
-                    } else {
-                        val = (CHM_A64E_TARGET(raw) + img->slide) | (CHM_A64E_HIGH8(raw) << 56);
-                    }
-                } else {
-                    free(imports);
-                    return -1;
-                }
-                memcpy(loc, &val, 8);
-                if (!next)
-                    break;
-                delta += (uint64_t)next * 4;
-            }
-        }
-    }
-    free(imports);
-    return 0;
-}
-
-static int chm_apply_bind(chm_image *img, uint32_t off, uint32_t size)
-{
-    const uint8_t *p = (const uint8_t *)img->file + off;
-    const uint8_t *end = p + size;
-    uint8_t *addr = NULL;
-    int64_t addend = 0;
-    const char *sym = NULL;
-
-    if ((uint64_t)off + size > img->filesize)
-        return -1;
-
-    while (p < end) {
-        uint8_t byte = *p++;
-        uint8_t op = byte & 0xf0;
-        uint8_t imm = byte & 0x0f;
-
-        switch (op) {
-        case 0x00:
-            return 0;
-        case 0x10:
-        case 0x20:
-        case 0x30:
-            if (op == 0x20)
-                chm_uleb(&p, end);
-            break;
-        case 0x40:
-            sym = (const char *)p;
-            p += strlen(sym) + 1;
-            break;
-        case 0x50:
-            break;
-        case 0x60:
-            addend = chm_sleb(&p, end);
-            break;
-        case 0x70:
-            if (imm >= img->nsegs)
-                return -1;
-            addr = (uint8_t *)(uintptr_t)(img->segs[imm].vmaddr + img->slide) + chm_uleb(&p, end);
-            break;
-        case 0x80:
-            if (!addr)
-                return -1;
-            addr += chm_uleb(&p, end);
-            break;
-        case 0x90:
-        case 0xa0:
-        case 0xb0:
-        case 0xc0: {
-            void *target = sym ? chm_resolve_import(sym) : NULL;
-            uint64_t count = 1;
-            uint64_t skip = 8;
-            uint64_t n;
-
-            if (op == 0xa0) {
-                if (!addr)
-                    return -1;
-                addr += chm_uleb(&p, end);
-            } else if (op == 0xb0) {
-                if (!addr)
-                    return -1;
-                addr += (uint64_t)imm * 8;
-            } else if (op == 0xc0) {
-                count = chm_uleb(&p, end);
-                skip = chm_uleb(&p, end);
-            }
-            if (!target) {
-                img->nfixup_missing++;
-                break;
-            }
-            for (n = 0; n < count; n++) {
-                uint64_t v = (uint64_t)(uintptr_t)target + (uint64_t)addend;
-
-                memcpy(addr, &v, 8);
-                img->nfixup_bind++;
-                if (op == 0xc0 && n + 1 < count)
-                    addr += skip;
-            }
-            addend = 0;
-            break;
-        }
-        default:
-            return -1;
-        }
-    }
+    img->executable = img->nfixup_missing == 0;
     return 0;
 }
 
 int chm_fixup_at(chm_image *img, uint64_t slide)
 {
-    if (chm_map(img, slide) != 0)
-        return -1;
-    if (chm_apply_chained(img) != 0)
-        return -1;
-    if (img->dyld_info && img->dyld_info->bind_size) {
-        if (chm_apply_bind(img, img->dyld_info->bind_off, img->dyld_info->bind_size) != 0)
-            return -1;
-    }
-    if (chm_protect(img) != 0)
+    if (chm_map(img, slide) || chm_bind_image(img) || chm_protect(img))
         return -1;
     return 0;
 }
 
 int chm_fixup(chm_image *img)
 {
-    return chm_fixup_at(img, 0);
+    if (chm_map_default(img) || chm_bind_image(img) || chm_protect(img))
+        return -1;
+    return 0;
+}
+
+void *chm_sym(chm_image *img, const char *name)
+{
+    if (!name || !img->reservation)
+        return NULL;
+    for (uint32_t i = 0; i < img->nsyms; ++i) {
+        chm_symbol *s = &img->syms[i];
+        if ((s->type & 0xe0) || strcmp(s->name, name))
+            continue;
+        if ((s->type & 0x0e) == 2)
+            return (void *)(uintptr_t)s->value;
+        if ((s->type & 0x0e) == 0x0e && s->value >= img->vm_min && s->value < img->vm_max)
+            return (void *)(uintptr_t)(s->value + img->slide);
+    }
+    return NULL;
 }
 
 void chm_dump(chm_image *img, FILE *out)
 {
-    uint32_t i;
-    uint32_t k;
-
-    fprintf(out, "magic       0x%08x\n", img->hdr->magic);
-    fprintf(out, "filetype    %u\n", img->hdr->filetype);
-    fprintf(out, "flags       0x%08x\n", img->hdr->flags);
-    fprintf(out, "platform    %u\n", img->platform);
-    fprintf(out, "segments    %u\n", img->nsegs);
-    fprintf(out, "vm range    0x%llx - 0x%llx\n",
-            (unsigned long long)img->vm_min, (unsigned long long)img->vm_max);
-    if (img->has_entry)
-        fprintf(out, "entry       LC_MAIN +0x%llx\n", (unsigned long long)img->entryoff);
-    else
-        fprintf(out, "entry       none\n");
-
-    for (i = 0; i < img->nsegs; i++) {
-        chm_segment *s = &img->segs[i];
-
-        fprintf(out, "seg %-12s vm=0x%llx vsize=0x%llx off=0x%llx size=0x%llx prot=%u/%u sects=%u\n",
-                s->name,
-                (unsigned long long)s->vmaddr,
-                (unsigned long long)s->vmsize,
-                (unsigned long long)s->fileoff,
-                (unsigned long long)s->filesize,
-                s->initprot, s->maxprot, s->nsects);
-        for (k = 0; k < s->nsects; k++)
-            fprintf(out, "  sect %-12s %-12s addr=0x%llx size=0x%llx\n",
-                    s->sects[k].sect, s->sects[k].seg,
-                    (unsigned long long)s->sects[k].addr,
-                    (unsigned long long)s->sects[k].size);
+    if (!img->hdr)
+        return;
+    fprintf(out, "platform %u, segments %u, dylibs %u, symbols %u\n", img->platform, img->nsegs, img->ndylibs, img->nsyms);
+    fprintf(out, "entry 0x%llx, slide 0x%llx, encrypted %u\n", (unsigned long long)img->entryoff, (unsigned long long)img->slide, img->cryptid);
+    for (uint32_t i = 0; i < img->nsegs; ++i) {
+        const chm_segment *s = &img->segs[i];
+        fprintf(out, "segment %u %s vm=0x%llx size=0x%llx prot=%u\n", i, s->name, (unsigned long long)s->vmaddr, (unsigned long long)s->vmsize, s->initprot);
+        for (uint32_t j = 0; j < s->nsects; ++j)
+            fprintf(out, "  %s addr=0x%llx size=0x%llx\n", s->sects[j].sect, (unsigned long long)s->sects[j].addr, (unsigned long long)s->sects[j].size);
     }
-    for (i = 0; i < img->ndylibs; i++)
-        fprintf(out, "dylib %u     %s\n", img->dylibs[i].ordinal, img->dylibs[i].name);
-    fprintf(out, "symbols     %u\n", img->nsyms);
-    fprintf(out, "chained     %s\n", img->chained ? "yes" : "no");
-    fprintf(out, "dyld_info   %s\n", img->dyld_info ? "yes" : "no");
-    fprintf(out, "binds       %u\n", img->nfixup_bind);
-    fprintf(out, "missing     %u\n", img->nfixup_missing);
+    for (uint32_t i = 0; i < img->ndylibs; ++i)
+        fprintf(out, "dylib %u %s\n", i + 1, img->dylibs[i].name);
+    fprintf(out, "bind=%u missing=%u weak-null=%u rebase=%u executable=%d\n", img->nfixup_bind, img->nfixup_missing, img->nfixup_weak, img->nfixup_rebase, img->executable);
 }

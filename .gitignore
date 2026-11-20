@@ -5,3 +5,9 @@ build/
 local.properties
 android/app/.cxx/
 android/.kotlin/
+/private/
+/artifacts/
+/reports/
+*.ipa
+*.keystore
+*.jks

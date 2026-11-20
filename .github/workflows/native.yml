@@ -1,0 +1,51 @@
+name: native
+
+on:
+  push:
+    paths:
+      - "src/**"
+      - "include/**"
+      - "tests/**"
+      - ".github/workflows/native.yml"
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: compiler
+        run: |
+          cc --version | head -1
+          uname -m
+
+      - name: fixup unit tests
+        run: |
+          cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -Iinclude \
+             -o test_fixups tests/test_fixups.c src/macho.c src/fixups.c
+          ./test_fixups
+
+      - name: malformed input rejection
+        run: |
+          cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -Iinclude \
+             -o test_reject tests/test_reject.c src/macho.c src/fixups.c
+          ./test_reject
+
+      - name: tools build
+        run: |
+          cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -Iinclude \
+             -o chmdump tools/chmdump.c src/macho.c src/fixups.c
+          cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -Iinclude \
+             -o symbol_demand tests/symbol_demand.c src/macho.c src/fixups.c
+          echo tools ok
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chimera-native-tools
+          path: |
+            chmdump
+            test_fixups
+            test_reject
+            symbol_demand
+          if-no-files-found: error
