@@ -416,14 +416,30 @@ int chm_session_load(chm_session *s, const char *exe_path)
 
     for (idx = s->image_count - 1; idx >= 0; idx--)
         chm_objc_session_scan(s, idx);
+    chm_libc_publish_images(s);
     s->prepared = true;
     return 0;
+}
+
+static void setup_env(void)
+{
+    char root[512];
+    char path[768];
+
+    chm_foundation_map_path("/var/mobile", root, sizeof(root));
+    setenv("HOME", root, 1);
+    setenv("CMC_HOME", root, 1);
+    setenv("TMPDIR", root, 1);
+    snprintf(path, sizeof(path), "%s/Library/Caches", root);
+    setenv("CFFIXED_USER_HOME", root, 1);
+    setenv("XDG_CACHE_HOME", path, 1);
 }
 
 int chm_session_run(chm_session *s, int argc, char **argv)
 {
     if (!s || !s->prepared || !s->images[0].executable)
         return -1;
+    setup_env();
     s->exit_code = chm_session_execute(s, &s->images[0], argc, argv);
     return s->exit_code;
 }

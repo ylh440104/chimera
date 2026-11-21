@@ -27,6 +27,26 @@ static int g_resolved;
 
 static chm_session *g_null_log_session;
 
+static int g_dyld_image_count;
+static const void *g_dyld_headers[CHM_MAX_IMAGES];
+static const char *g_dyld_names[CHM_MAX_IMAGES];
+static uint64_t g_dyld_slides[CHM_MAX_IMAGES];
+
+void chm_libc_publish_images(chm_session *s)
+{
+    int i;
+
+    g_dyld_image_count = 0;
+    if (!s)
+        return;
+    for (i = 0; i < s->image_count && i < CHM_MAX_IMAGES; i++) {
+        g_dyld_headers[i] = (const void *)(uintptr_t)(s->images[i].vm_min + s->images[i].slide);
+        g_dyld_names[i] = s->image_paths[i];
+        g_dyld_slides[i] = s->images[i].slide;
+        g_dyld_image_count++;
+    }
+}
+
 void chm_runtime_init(void)
 {
     g_resolved = 0;
@@ -425,25 +445,28 @@ static void *tlv_bootstrap_impl(void *desc)
 
 static unsigned int dyld_image_count_impl(void)
 {
-    return 0;
+    return (unsigned int)g_dyld_image_count;
 }
 
 static const void *dyld_get_image_header_impl(unsigned int index)
 {
-    (void)index;
-    return NULL;
+    if (index >= (unsigned int)g_dyld_image_count)
+        return NULL;
+    return g_dyld_headers[index];
 }
 
 static const char *dyld_get_image_name_impl(unsigned int index)
 {
-    (void)index;
-    return NULL;
+    if (index >= (unsigned int)g_dyld_image_count)
+        return NULL;
+    return g_dyld_names[index];
 }
 
 static intptr_t dyld_get_image_vmaddr_slide_impl(unsigned int index)
 {
-    (void)index;
-    return 0;
+    if (index >= (unsigned int)g_dyld_image_count)
+        return 0;
+    return (intptr_t)g_dyld_slides[index];
 }
 
 static unsigned int dyld_get_active_platform_impl(void)
@@ -504,6 +527,11 @@ static char *safe_strdup(const char *s)
 void chm_libc_set_session(chm_session *s)
 {
     g_null_log_session = s;
+}
+
+chm_session *chm_libc_session(void)
+{
+    return g_null_log_session;
 }
 
 static void abort_impl(void)

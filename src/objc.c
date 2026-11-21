@@ -461,6 +461,74 @@ void *chm_objc_cfstr_isa(void)
     return g_cfstr_isa;
 }
 
+static const char *g_variadic_sels[] = {
+    "stringWithFormat:",
+    "localizedStringWithFormat:",
+    "initWithFormat:",
+    "stringByAppendingFormat:",
+    "appendFormat:",
+    "predicateWithFormat:",
+    "stringWithCharacters:length:",
+    NULL
+};
+
+static long sel_is_variadic(const char *sel)
+{
+    int i;
+
+    if (!sel)
+        return 0;
+    for (i = 0; g_variadic_sels[i]; i++) {
+        if (strcmp(g_variadic_sels[i], sel) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+typedef struct {
+    void *__stack;
+    void *__gr_top;
+    void *__vr_top;
+    int __gr_offs;
+    int __vr_offs;
+} chm_va_layout;
+
+void *chm_objc_call_variadic(void *self, const char *sel, void *gp, void *fp, void *caller_stack,
+                             void *imp)
+{
+    chm_va_layout va;
+    void *(*fn)(void *, const char *, void *);
+
+    (void)caller_stack;
+    if (!imp || !sel)
+        return NULL;
+    va.__stack = caller_stack;
+    va.__gr_top = (char *)gp + 64;
+    va.__gr_offs = (2 - 8) * 8;
+    va.__vr_top = (char *)fp + 128;
+    va.__vr_offs = (0 - 8) * 16;
+    fn = (void *(*)(void *, const char *, void *))imp;
+    return fn(self, sel, &va);
+}
+
+chm_resolve_pair chm_objc_resolve_imp2(void *self, const char *sel)
+{
+    chm_resolve_pair r;
+
+    r.imp = chm_objc_resolve_imp(self, sel);
+    r.variadic = r.imp ? sel_is_variadic(sel) : 0;
+    return r;
+}
+
+chm_resolve_pair chm_objc_resolve_super2_imp2(void *super_ptr, const char *sel)
+{
+    chm_resolve_pair r;
+
+    r.imp = chm_objc_resolve_super2_imp(super_ptr, sel);
+    r.variadic = r.imp ? sel_is_variadic(sel) : 0;
+    return r;
+}
+
 void chm_objc_set_cfstr_isa(void *isa)
 {
     if (isa)

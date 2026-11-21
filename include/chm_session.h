@@ -119,6 +119,16 @@ void *chm_foundation_string(const char *bytes);
 void *chm_objc_cfstr_isa(void);
 void chm_objc_set_cfstr_isa(void *isa);
 
+typedef struct {
+    void *imp;
+    long variadic;
+} chm_resolve_pair;
+
+chm_resolve_pair chm_objc_resolve_imp2(void *self, const char *sel);
+chm_resolve_pair chm_objc_resolve_super2_imp2(void *super_ptr, const char *sel);
+void *chm_objc_call_variadic(void *self, const char *sel, void *gp, void *fp, void *caller_stack,
+                             void *imp);
+
 void *chm_objc_send0(void *obj, const char *sel);
 void *chm_objc_send1(void *obj, const char *sel, void *a);
 void *chm_objc_send2(void *obj, const char *sel, void *a, void *b);
@@ -127,6 +137,7 @@ void *chm_objc_new_object(const char *cls_name);
 int chm_objc_session_add_method(chm_session *s, const chm_method_reg *m);
 
 void chm_libc_set_session(chm_session *s);
+void chm_libc_publish_images(chm_session *s);
 
 void *chm_frameworks_lookup(const char *name);
 int chm_frameworks_count(void);

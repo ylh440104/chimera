@@ -754,16 +754,20 @@ static void *s_with_utf8(void *cls, const char *sel, const char *bytes)
     return fo_string_new(bytes);
 }
 
-static void *s_with_format(void *cls, const char *sel, void *fmt_obj, ...)
+static void *s_with_format_va(void *cls, const char *sel, void *va_ptr)
 {
     char buf[2048];
-    va_list ap;
+    va_list *ap = va_ptr;
+    void *fmt_obj;
+    const char *fmt;
 
     (void)cls;
     (void)sel;
-    va_start(ap, fmt_obj);
-    chm_format(buf, sizeof(buf), fo_bytes(fmt_obj), ap);
-    va_end(ap);
+    if (!ap)
+        return fo_string_new("");
+    fmt_obj = va_arg(*ap, void *);
+    fmt = fo_bytes(fmt_obj);
+    chm_format(buf, sizeof(buf), fmt, *ap);
     return fo_string_new(buf);
 }
 
@@ -1796,8 +1800,10 @@ static const struct {
     { "isAbsolutePath", (void *)s_is_absolute },
     { "stringWithUTF8String:", (void *)s_with_utf8 },
     { "stringWithCString:encoding:", (void *)s_with_utf8 },
-    { "stringWithFormat:", (void *)s_with_format },
-    { "localizedStringWithFormat:", (void *)s_with_format },
+    { "stringWithFormat:", (void *)s_with_format_va },
+    { "localizedStringWithFormat:", (void *)s_with_format_va },
+    { "initWithFormat:", (void *)s_with_format_va },
+    { "stringByAppendingFormat:", (void *)s_with_format_va },
     { "integerValue", (void *)o_integer },
     { "intValue", (void *)o_integer },
     { "longLongValue", (void *)o_integer },
