@@ -107,6 +107,7 @@ void chm_foundation_shutdown(void);
 int chm_foundation_class_count(void);
 void *chm_foundation_lookup_class(const char *name);
 void *chm_foundation_lookup_metaclass(const char *name);
+void *chm_foundation_class_ro(void *cls);
 void *chm_foundation_lookup_method(const char *cls_name, const char *sel);
 void chm_foundation_note_missing_selector(const char *cls_name, const char *sel);
 void chm_foundation_set_root(const char *root);
@@ -118,16 +119,6 @@ void *chm_foundation_string(const char *bytes);
 
 void *chm_objc_cfstr_isa(void);
 void chm_objc_set_cfstr_isa(void *isa);
-
-typedef struct {
-    void *imp;
-    long variadic;
-} chm_resolve_pair;
-
-chm_resolve_pair chm_objc_resolve_imp2(void *self, const char *sel);
-chm_resolve_pair chm_objc_resolve_super2_imp2(void *super_ptr, const char *sel);
-void *chm_objc_call_variadic(void *self, const char *sel, void *gp, void *fp, void *caller_stack,
-                             void *imp);
 
 void *chm_objc_send0(void *obj, const char *sel);
 void *chm_objc_send1(void *obj, const char *sel, void *a);

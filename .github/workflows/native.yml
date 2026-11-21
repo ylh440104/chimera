@@ -43,13 +43,24 @@ jobs:
         run: |
           SRC="src/macho.c src/fixups.c src/session.c src/objc.c src/objc_arm64.S \
                src/libcshim.c src/dispatch.c src/foundation.c src/frameworks.c \
-               src/format.c src/trap.c src/loader.c"
+               src/format.c src/uikit.c src/trap.c src/loader.c"
           cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -Iinclude -o chmdump tools/chmdump.c $SRC -lm -ldl
           cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -Iinclude -o chmdemand tools/chmdemand.c $SRC -lm -ldl
           cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -Iinclude -o chimera_run tools/chimera_run.c $SRC -lm -ldl
-          ./chmdump tests/fixture.ios > dump.txt || cat dump.txt
+          ./chmdump tests/fixture.ios > dump.txt
           head -3 dump.txt
-          ./chmdump 2>&1 | head -1
+          rc=0
+          ./chmdump >usage.txt 2>&1 || rc=$?
+          test "$rc" -eq 2
+          grep -F 'usage: chmdump' usage.txt
+
+      - name: Darwin ARM64 ABI regressions
+        run: |
+          if ! command -v clang-18 >/dev/null || ! command -v ld64.lld-18 >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y clang-18 lld-18
+          fi
+          sh tests/run_darwin_abi.sh "$PWD/chimera_run"
 
       - uses: actions/upload-artifact@v4
         with:

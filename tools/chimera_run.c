@@ -15,6 +15,9 @@ int main(int argc, char **argv)
         fprintf(stderr, "session alloc failed\n");
         return 1;
     }
+    const char *root = getenv("CHM_SANDBOX_ROOT");
+    if (root && *root)
+        chm_foundation_set_root(root);
     int rc = chm_session_load(s, argv[1]);
     if (rc) {
         char out[16384];

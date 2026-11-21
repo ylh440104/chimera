@@ -30,48 +30,49 @@
 .endm
 
 chm_objc_msgSend_trampoline:
-    cbz x0, L_nil_ret
+    cbz x0, .Lnil
     SAVE_ALL
-    bl chm_objc_resolve_imp2
+    bl chm_objc_resolve_imp
     mov x16, x0
-    mov x17, x1
-    cbnz x17, L_variadic_dispatch
     RESTORE_ALL
-    ldp x29, x30, [sp], #256
-    cbz x16, L_nil_ret
-    br x16
+    b .Ldispatch
 
 chm_objc_msgSendSuper2_trampoline:
-    cbz x0, L_nil_ret
+    cbz x0, .Lnil
+    ldr x9, [x0]
+    cbz x9, .Lnil
     SAVE_ALL
-    bl chm_objc_resolve_super2_imp2
+    bl chm_objc_resolve_super2_imp
     mov x16, x0
-    mov x17, x1
-    cbnz x17, L_variadic_super2
     RESTORE_ALL
     ldr x0, [x0]
+.Ldispatch:
     ldp x29, x30, [sp], #256
-    cbz x16, L_nil_ret
+    cbz x16, .Lnil
     br x16
 
-L_variadic_super2:
-    ldr x0, [x0]
-    str x0, [sp, #16]
-    b L_variadic_dispatch
-
-L_variadic_dispatch:
-    ldp x0, x1, [sp, #16]
-    add x2, sp, #16
-    add x3, sp, #96
-    add x4, sp, #256
-    mov x5, x16
-    bl chm_objc_call_variadic
-    ldp x29, x30, [sp], #256
+.Lnil:
+    mov x0, xzr
+    mov x1, xzr
+    movi v0.16b, #0
+    movi v1.16b, #0
+    movi v2.16b, #0
+    movi v3.16b, #0
     ret
 
-L_nil_ret:
-    mov x0, #0
-    mov x1, #0
-    fmov d0, xzr
-    fmov d1, xzr
-    ret
+.macro DARWIN_ENTRY name, next_arg, body
+    .globl \name
+    .hidden \name
+    .type \name, %function
+\name:
+    mov \next_arg, sp
+    b \body
+    .size \name, .-\name
+.endm
+
+DARWIN_ENTRY chm_ns_format_entry, x3, chm_ns_format_list
+DARWIN_ENTRY chm_ns_append_format_entry, x3, chm_ns_append_format_list
+DARWIN_ENTRY chm_printf_entry, x1, chm_printf_list
+DARWIN_ENTRY chm_fprintf_entry, x2, chm_fprintf_list
+
+.section .note.GNU-stack,"",%progbits

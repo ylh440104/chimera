@@ -312,6 +312,12 @@ static fo_class *fo_owning(void *cls)
     return NULL;
 }
 
+void *chm_foundation_class_ro(void *cls)
+{
+    fo_class *c = fo_owning(cls);
+    return c ? &c->ro : NULL;
+}
+
 static fo_class *fo_make(const char *name, const char *parent, uint32_t size)
 {
     fo_class *c = calloc(1, sizeof(*c));
@@ -697,29 +703,26 @@ static int64_t o_count(void *self)
 
 static const char *o_utf8(void *self)
 {
-    if (fo_is_string(self))
-        return ((fo_string *)self)->bytes;
     if (fo_is_data(self))
         return (const char *)((fo_data *)self)->bytes;
-    return "";
+    return fo_bytes(self);
 }
 
-static const char *o_bytes(void *self)
+static const char *describe_utf8(void *self)
 {
-    if (fo_is_string(self))
-        return ((fo_string *)self)->bytes;
-    if (fo_is_data(self))
-        return (const char *)((fo_data *)self)->bytes;
-    return "";
-}
-
-static const char *o_description(void *self)
-{
-    if (fo_is_string(self))
-        return ((fo_string *)self)->bytes;
     if (!self || (uintptr_t)self < FO_MIN_PTR)
         return "(null)";
+    if (fo_is_string(self) || fo_is_cfstring(self))
+        return fo_bytes(self);
     return fo_class_name(*(void **)self);
+}
+
+static void *o_description(void *self, const char *sel)
+{
+    (void)sel;
+    if (fo_is_string(self) || fo_is_cfstring(self))
+        return self;
+    return fo_string_new(describe_utf8(self));
 }
 
 static int64_t o_integer(void *self)
@@ -754,31 +757,40 @@ static void *s_with_utf8(void *cls, const char *sel, const char *bytes)
     return fo_string_new(bytes);
 }
 
-static void *s_with_format_va(void *cls, const char *sel, void *va_ptr)
+extern void chm_ns_format_entry(void);
+extern void chm_ns_append_format_entry(void);
+
+void *chm_ns_format_list(void *self, const char *sel, void *fmt, const void *slots)
 {
-    char buf[2048];
-    va_list *ap = va_ptr;
-    void *fmt_obj;
-    const char *fmt;
-
-    (void)cls;
-    (void)sel;
-    if (!ap)
-        return fo_string_new("");
-    fmt_obj = va_arg(*ap, void *);
-    fmt = fo_bytes(fmt_obj);
-    chm_format(buf, sizeof(buf), fmt, *ap);
-    return fo_string_new(buf);
-}
-
-static void *s_init_with_format_args(void *self, const char *sel, void *fmt_obj, va_list ap)
-{
-    char buf[2048];
-
     (void)self;
     (void)sel;
-    chm_format(buf, sizeof(buf), fo_bytes(fmt_obj), ap);
-    return fo_string_new(buf);
+    char *text = chm_format_darwin(fo_bytes(fmt), slots, NULL);
+    if (!text)
+        return NULL;
+    void *str = fo_string_new(text);
+    free(text);
+    return str;
+}
+
+void *chm_ns_append_format_list(void *self, const char *sel, void *fmt, const void *slots)
+{
+    (void)sel;
+    size_t len;
+    char *text = chm_format_darwin(fo_bytes(fmt), slots, &len);
+    if (!text)
+        return NULL;
+    const char *prefix = fo_bytes(self);
+    size_t n = strlen(prefix);
+    char *joined = n <= SIZE_MAX - len - 1 ? malloc(n + len + 1) : NULL;
+    void *str = NULL;
+    if (joined) {
+        memcpy(joined, prefix, n);
+        memcpy(joined + n, text, len + 1);
+        str = fo_string_new(joined);
+        free(joined);
+    }
+    free(text);
+    return str;
 }
 
 static void *s_append_component(void *self, const char *sel, void *comp)
@@ -1781,7 +1793,7 @@ static const struct {
     { "count", (void *)o_count },
     { "UTF8String", (void *)o_utf8 },
     { "fileSystemRepresentation", (void *)o_utf8 },
-    { "bytes", (void *)o_bytes },
+    { "bytes", (void *)o_utf8 },
     { "absoluteString", (void *)s_identity },
     { "path", (void *)s_identity },
     { "lastPathComponent", (void *)s_last_component },
@@ -1800,10 +1812,10 @@ static const struct {
     { "isAbsolutePath", (void *)s_is_absolute },
     { "stringWithUTF8String:", (void *)s_with_utf8 },
     { "stringWithCString:encoding:", (void *)s_with_utf8 },
-    { "stringWithFormat:", (void *)s_with_format_va },
-    { "localizedStringWithFormat:", (void *)s_with_format_va },
-    { "initWithFormat:", (void *)s_with_format_va },
-    { "stringByAppendingFormat:", (void *)s_with_format_va },
+    { "stringWithFormat:", (void *)chm_ns_format_entry },
+    { "localizedStringWithFormat:", (void *)chm_ns_format_entry },
+    { "initWithFormat:", (void *)chm_ns_format_entry },
+    { "stringByAppendingFormat:", (void *)chm_ns_append_format_entry },
     { "integerValue", (void *)o_integer },
     { "intValue", (void *)o_integer },
     { "longLongValue", (void *)o_integer },
@@ -1849,7 +1861,7 @@ static const struct {
     { "writeToFile:atomically:", (void *)d_write_file },
     { "stringWithContentsOfFile:encoding:error:", (void *)str_with_contents_of_file },
     { "writeToFile:atomically:encoding:error:", (void *)str_write_to_file },
-    { "initWithFormat:arguments:", (void *)s_init_with_format_args },
+    { "initWithFormat:arguments:", (void *)chm_ns_format_list },
     { "URLsForDirectory:inDomains:", (void *)f_urls },
     { "URLForDirectory:inDomain:appropriateForURL:create:error:", (void *)f_urls },
     { "contentsOfDirectoryAtPath:error:", (void *)f_contents },
@@ -1894,7 +1906,7 @@ void chm_foundation_init(chm_session *s)
     g_session = s;
     g_class_count = 0;
     g_pair_count = 0;
-    chm_format_set_describer((chm_desc_fn)o_description);
+    chm_format_set_describer(describe_utf8);
     for (i = 0; g_seed[i].name; i++) {
         fo_class *c;
 

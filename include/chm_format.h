@@ -8,6 +8,7 @@ typedef const char *(*chm_desc_fn)(void *obj);
 
 void chm_format_set_describer(chm_desc_fn fn);
 void chm_format(char *dst, size_t cap, const char *fmt, va_list ap);
+char *chm_format_darwin(const char *fmt, const void *slots, size_t *length);
 void chm_format_args(char *dst, size_t cap, const char *fmt, ...);
 
 #endif

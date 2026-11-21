@@ -1,14 +1,74 @@
 #include "chm_format.h"
 
+#include <errno.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
 
 typedef struct {
     char *buf;
     size_t cap;
     size_t len;
+    int grow;
+    int failed;
 } chm_sink;
+
+typedef struct {
+    va_list *host;
+    const unsigned char *slots;
+    int failed;
+} chm_args;
+
+static void read_scalar(chm_args *a, void *out, size_t bytes)
+{
+    if (!a->slots) {
+        memset(out, 0, bytes);
+        a->failed = 1;
+        errno = EINVAL;
+        return;
+    }
+    memcpy(out, a->slots, bytes);
+    a->slots += 8;
+}
+
+#define NEXT(a, type) ((a)->host ? va_arg(*(a)->host, type) : \
+    __extension__ ({ type value; _Static_assert(sizeof(value) <= 8, "Darwin scalar"); \
+                    read_scalar((a), &value, sizeof(value)); value; }))
+
+#define CHM_FMT_LIMIT (16u * 1024u * 1024u)
+
+static size_t sink_room(chm_sink *s, size_t n)
+{
+    if (s->failed)
+        return 0;
+    if (s->grow) {
+        if (n > CHM_FMT_LIMIT - s->len) {
+            errno = EOVERFLOW;
+            s->failed = 1;
+            return 0;
+        }
+        size_t need = s->len + n + 1;
+        if (need > s->cap) {
+            size_t cap = s->cap ? s->cap * 2 : 128;
+            if (cap < need)
+                cap = need;
+            if (cap > CHM_FMT_LIMIT + 1u)
+                cap = CHM_FMT_LIMIT + 1u;
+            char *p = realloc(s->buf, cap);
+            if (!p) {
+                s->failed = 1;
+                return 0;
+            }
+            s->buf = p;
+            s->cap = cap;
+        }
+    }
+    size_t left = s->cap - s->len - 1;
+    return n < left ? n : left;
+}
 
 static chm_desc_fn g_describer;
 
@@ -19,26 +79,26 @@ void chm_format_set_describer(chm_desc_fn fn)
 
 static void sink_putc(chm_sink *s, char c)
 {
-    if (s->len + 1 < s->cap)
+    if (sink_room(s, 1))
         s->buf[s->len++] = c;
 }
 
 static void sink_put(chm_sink *s, const char *p, size_t n)
 {
-    size_t i;
-
-    if (!p)
-        return;
-    for (i = 0; i < n; i++)
-        sink_putc(s, p[i]);
+    size_t count = sink_room(s, n);
+    if (count) {
+        memcpy(s->buf + s->len, p, count);
+        s->len += count;
+    }
 }
 
 static void sink_pad(chm_sink *s, char c, int n)
 {
-    int i;
-
-    for (i = 0; i < n; i++)
-        sink_putc(s, c);
+    size_t count = n > 0 ? sink_room(s, (size_t)n) : 0;
+    if (count) {
+        memset(s->buf + s->len, c, count);
+        s->len += count;
+    }
 }
 
 static int u64_digits(uint64_t v, unsigned base, int upper, char *out)
@@ -210,22 +270,9 @@ static void emit_cstr(chm_sink *s, const char *p, int width, int prec, int left)
         sink_pad(s, ' ', pad);
 }
 
-void chm_format(char *dst, size_t cap, const char *fmt, va_list ap0)
+static void format_to(chm_sink *sink, const char *fmt, chm_args *args)
 {
-    chm_sink s;
-    va_list ap;
-
-    if (!dst || !cap)
-        return;
-    dst[0] = 0;
-    if (!fmt)
-        return;
-    s.buf = dst;
-    s.cap = cap;
-    s.len = 0;
-    va_copy(ap, ap0);
-
-    while (*fmt) {
+    while (*fmt && !sink->failed && !args->failed) {
         int left = 0;
         int plus = 0;
         int space = 0;
@@ -237,7 +284,7 @@ void chm_format(char *dst, size_t cap, const char *fmt, va_list ap0)
         char conv;
 
         if (*fmt != '%') {
-            sink_putc(&s, *fmt++);
+            sink_putc(sink, *fmt++);
             continue;
         }
         fmt++;
@@ -259,7 +306,7 @@ void chm_format(char *dst, size_t cap, const char *fmt, va_list ap0)
         }
 
         if (*fmt == '*') {
-            width = va_arg(ap, int);
+            width = NEXT(args, int);
             if (width < 0) {
                 left = 1;
                 width = -width;
@@ -277,7 +324,7 @@ void chm_format(char *dst, size_t cap, const char *fmt, va_list ap0)
             fmt++;
             prec = 0;
             if (*fmt == '*') {
-                prec = va_arg(ap, int);
+                prec = NEXT(args, int);
                 if (prec < 0)
                     prec = -1;
                 fmt++;
@@ -323,37 +370,37 @@ void chm_format(char *dst, size_t cap, const char *fmt, va_list ap0)
 
         conv = *fmt;
         if (!conv) {
-            sink_putc(&s, '%');
+            sink_putc(sink, '%');
             break;
         }
         fmt++;
 
         switch (conv) {
         case '%':
-            sink_putc(&s, '%');
+            sink_putc(sink, '%');
             break;
         case '@': {
-            void *obj = va_arg(ap, void *);
+            void *obj = NEXT(args, void *);
             const char *desc = NULL;
 
             if (g_describer && obj && (uintptr_t)obj >= 0x10000u)
                 desc = g_describer(obj);
             if (!desc)
                 desc = obj ? "(object)" : "(null)";
-            emit_cstr(&s, desc, width, prec, left);
+            emit_cstr(sink, desc, width, prec, left);
             break;
         }
         case 's':
-            emit_cstr(&s, va_arg(ap, const char *), width, prec, left);
+            emit_cstr(sink, NEXT(args, const char *), width, prec, left);
             break;
         case 'c': {
-            char c = (char)va_arg(ap, int);
+            char c = (char)NEXT(args, int);
 
             if (!left)
-                sink_pad(&s, ' ', width > 1 ? width - 1 : 0);
-            sink_putc(&s, c);
+                sink_pad(sink, ' ', width > 1 ? width - 1 : 0);
+            sink_putc(sink, c);
             if (left)
-                sink_pad(&s, ' ', width > 1 ? width - 1 : 0);
+                sink_pad(sink, ' ', width > 1 ? width - 1 : 0);
             break;
         }
         case 'd':
@@ -361,16 +408,16 @@ void chm_format(char *dst, size_t cap, const char *fmt, va_list ap0)
             int64_t v;
 
             if (lmod == 4 || lmod == 7 || lmod == 8)
-                v = va_arg(ap, long long);
+                v = NEXT(args, long long);
             else if (lmod == 3)
-                v = va_arg(ap, long);
+                v = NEXT(args, long);
             else if (lmod == 5)
-                v = (int64_t)va_arg(ap, size_t);
+                v = (int64_t)NEXT(args, size_t);
             else if (lmod == 6)
-                v = (int64_t)va_arg(ap, ptrdiff_t);
+                v = (int64_t)NEXT(args, ptrdiff_t);
             else
-                v = va_arg(ap, int);
-            emit_int(&s, v < 0 ? (uint64_t)(-(v + 1)) + 1 : (uint64_t)v, v < 0, 10, 0,
+                v = NEXT(args, int);
+            emit_int(sink, v < 0 ? (uint64_t)(-(v + 1)) + 1 : (uint64_t)v, v < 0, 10, 0,
                      width, prec, left, zero, plus, space, 0);
             break;
         }
@@ -382,38 +429,38 @@ void chm_format(char *dst, size_t cap, const char *fmt, va_list ap0)
             unsigned base = conv == 'u' ? 10 : (conv == 'o' ? 8 : 16);
 
             if (lmod == 4 || lmod == 7 || lmod == 8)
-                v = va_arg(ap, unsigned long long);
+                v = NEXT(args, unsigned long long);
             else if (lmod == 3)
-                v = va_arg(ap, unsigned long);
+                v = NEXT(args, unsigned long);
             else if (lmod == 5)
-                v = va_arg(ap, size_t);
+                v = NEXT(args, size_t);
             else if (lmod == 6)
-                v = (uint64_t)va_arg(ap, ptrdiff_t);
+                v = (uint64_t)NEXT(args, ptrdiff_t);
             else
-                v = va_arg(ap, unsigned int);
-            emit_int(&s, v, 0, base, conv == 'X', width, prec, left, zero, 0, 0,
+                v = NEXT(args, unsigned int);
+            emit_int(sink, v, 0, base, conv == 'X', width, prec, left, zero, 0, 0,
                      alt && (conv == 'x' || conv == 'X' || conv == 'o'));
             break;
         }
         case 'p': {
-            void *p = va_arg(ap, void *);
+            void *p = NEXT(args, void *);
 
-            sink_put(&s, "0x", 2);
+            sink_put(sink, "0x", 2);
             if (p) {
                 char digits[32];
                 int nd = u64_digits((uint64_t)(uintptr_t)p, 16, 0, digits);
 
-                sink_put(&s, digits, (size_t)nd);
+                sink_put(sink, digits, (size_t)nd);
             } else {
-                sink_putc(&s, '0');
+                sink_putc(sink, '0');
             }
             break;
         }
         case 'n': {
-            void *slot = va_arg(ap, void *);
+            void *slot = NEXT(args, void *);
 
             if (slot)
-                *(int *)slot = (int)s.len;
+                *(int *)slot = (int)sink->len;
             break;
         }
         case 'f':
@@ -424,7 +471,7 @@ void chm_format(char *dst, size_t cap, const char *fmt, va_list ap0)
         case 'G':
         case 'a':
         case 'A':
-            emit_double(&s, va_arg(ap, double), conv, width, prec, left, zero, plus, space, alt);
+            emit_double(sink, NEXT(args, double), conv, width, prec, left, zero, plus, space, alt);
             break;
         default: {
             char lit[3];
@@ -432,14 +479,45 @@ void chm_format(char *dst, size_t cap, const char *fmt, va_list ap0)
             lit[0] = '%';
             lit[1] = conv;
             lit[2] = 0;
-            sink_put(&s, lit, 2);
+            sink_put(sink, lit, 2);
             break;
         }
         }
     }
 
+    if (args->failed)
+        sink->failed = 1;
+}
+
+void chm_format(char *dst, size_t cap, const char *fmt, va_list ap0)
+{
+    if (!dst || !cap)
+        return;
+    chm_sink sink = { .buf = dst, .cap = cap };
+    va_list ap;
+    va_copy(ap, ap0);
+    chm_args args = { .host = &ap };
+    format_to(&sink, fmt ? fmt : "", &args);
     va_end(ap);
-    dst[s.len < cap ? s.len : cap - 1] = 0;
+    dst[sink.len] = 0;
+}
+
+char *chm_format_darwin(const char *fmt, const void *slots, size_t *length)
+{
+    chm_sink sink = { .grow = 1 };
+    chm_args args = { .slots = slots };
+    if (length)
+        *length = 0;
+    sink_room(&sink, 0);
+    format_to(&sink, fmt ? fmt : "", &args);
+    if (sink.failed) {
+        free(sink.buf);
+        return NULL;
+    }
+    sink.buf[sink.len] = 0;
+    if (length)
+        *length = sink.len;
+    return sink.buf;
 }
 
 void chm_format_args(char *dst, size_t cap, const char *fmt, ...)

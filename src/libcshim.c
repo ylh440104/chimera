@@ -281,41 +281,33 @@ static void emit_text(const char *text)
     chm_session_log(g_null_log_session, "out: %s", text);
 }
 
-static int printf_impl(const char *fmt, ...)
+extern void chm_printf_entry(void);
+extern void chm_fprintf_entry(void);
+
+int chm_fprintf_list(FILE *stream, const char *fmt, const void *slots)
 {
-    char buf[1024];
-    va_list ap;
-
-    if (g_vprintf_count > 400)
-        return 0;
-    g_vprintf_count++;
-    va_start(ap, fmt);
-    chm_format(buf, sizeof(buf), fmt, ap);
-    va_end(ap);
-    emit_text(buf);
-    return (int)strlen(buf);
-}
-
-static int fprintf_impl(FILE *stream, const char *fmt, ...)
-{
-    char buf[1024];
-    va_list ap;
-    int n;
-
+    size_t len;
     if (!stream || !fmt)
-        return 0;
-    va_start(ap, fmt);
-    chm_format(buf, sizeof(buf), fmt, ap);
-    va_end(ap);
+        return -1;
+    char *text = chm_format_darwin(fmt, slots, &len);
+    if (!text)
+        return -1;
+    int rc = (int)len;
     if (stream == stdout || stream == stderr) {
         if (g_vprintf_count <= 400) {
             g_vprintf_count++;
-            emit_text(buf);
+            emit_text(text);
         }
-        return (int)strlen(buf);
+    } else if (fwrite(text, 1, len, stream) != len) {
+        rc = -1;
     }
-    n = (int)fwrite(buf, 1, strlen(buf), stream);
-    return n;
+    free(text);
+    return rc;
+}
+
+int chm_printf_list(const char *fmt, const void *slots)
+{
+    return chm_fprintf_list(stdout, fmt, slots);
 }
 
 static int setvbuf_impl(FILE *stream, char *buf, int mode, size_t size)
@@ -751,8 +743,8 @@ static const chm_entry g_entries[] = {
     FN("_dirname", safe_dirname, "libc.str"),
     FN("_realpath$DARWIN_EXTSN", realpath_impl, "libc.str"),
     FN("_realpath", realpath_impl, "libc.str"),
-    FN("_printf", printf_impl, "libc.io"),
-    FN("_fprintf", fprintf_impl, "libc.io"),
+    FN("_printf", chm_printf_entry, "libc.io"),
+    FN("_fprintf", chm_fprintf_entry, "libc.io"),
     FN("_fopen", fopen_mapped, "libc.io"),
     FN("_freopen", fopen_mapped, "libc.io"),
     FN("_fclose", fclose_impl, "libc.io"),

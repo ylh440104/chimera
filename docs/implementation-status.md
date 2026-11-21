@@ -1,8 +1,16 @@
 # 实施记录
 
-## 当前批次
+## Darwin ARM64 变参验收
 
-修复 Mach-O 旧格式绑定和镜像生命周期，加入原生回归测试。尚未宣称目标 IPA 可运行。
+`stringWithFormat:` 的格式串是固定参数，保留在 `x2`；该调用的匿名标量从调用方栈读取。普通派发和 `Super2` 不按选择器猜测参数布局。Foundation 自建类的元数据使用宿主指针，只有客机类数据使用 Darwin 地址掩码。
+
+在 ARM64 Linux 上，使用当前 `chimera_run`、Clang 18 和 LLD 18 可运行 `sh tests/run_darwin_abi.sh /absolute/path/to/chimera_run`，不需要 Apple SDK。同一份路径测试 Mach-O 修复前返回 `11`，修复后返回 `0`。测试实际创建 `/var/mobile/Documents/profiles`，并逐字节比对目录中的 14 字节文件。另一个 Mach-O 验证了客机同名方法、`Super2`、浮点参数和间接返回值。
+
+在断网 ARM64 虚拟机中，未修改的 CMCLauncher 可执行文件进入 `UIApplicationMain` 并返回 `0`；独立目录检查确认创建了 `mobile/Containers/Data/Application/App/Documents` 和 `latestlog.txt`。本次使用的是解包后的主程序，不是完整资源包；未验证 Android 首帧和交互。已观察到的后续缺口包括 `NSNumber` 装箱、集合初始化和字典下标写入。
+
+## 此前的加载器修复
+
+修复 Mach-O 旧格式绑定和镜像生命周期，加入原生回归测试。
 
 已确认的旧实现问题：
 
