@@ -1,0 +1,111 @@
+name: extract
+
+on:
+  workflow_dispatch:
+    inputs:
+      runtime:
+        description: "volume dir name, e.g. iOS_26.2 (empty = auto)"
+        required: false
+        default: ""
+
+jobs:
+  extract:
+    runs-on: macos-15
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: locate
+        run: |
+          set -uo pipefail
+          WANT="${{ inputs.runtime }}"
+          ROOT=""
+          SEARCH=/Library/Developer/CoreSimulator/Volumes
+          [ -n "$WANT" ] && SEARCH="$SEARCH/$WANT"
+          while IFS= read -r -d '' d; do
+            if [ -f "$d/System/Library/Frameworks/UIKit.framework/UIKit" ]; then
+              ROOT="$d"; break
+            fi
+          done < <(find "$SEARCH" -maxdepth 9 -name RuntimeRoot -type d -print0 2>/dev/null)
+          if [ -z "$ROOT" ]; then
+            echo "NOT_FOUND"; ls -1 /Library/Developer/CoreSimulator/Volumes; exit 1
+          fi
+          echo "ROOT=$ROOT"
+          echo "ROOT=$ROOT" >> "$GITHUB_ENV"
+
+      - name: inventory
+        run: |
+          set -uo pipefail
+          {
+            echo "root=$ROOT"
+            echo "--- frameworks"
+            for fw in UIKit Foundation CoreFoundation CoreGraphics QuartzCore Security CoreText CoreImage Metal; do
+              B="$ROOT/System/Library/Frameworks/$fw.framework/$fw"
+              if [ -f "$B" ]; then
+                echo "FW $fw size=$(stat -f %z "$B") archs=$(lipo -archs "$B" 2>/dev/null)"
+              else
+                echo "FW $fw MISSING"
+              fi
+            done
+            echo "--- usr/lib count=$(ls -1 "$ROOT/usr/lib" 2>/dev/null | wc -l)"
+            for lib in libobjc.A.dylib libSystem.B.dylib libdispatch.dylib; do
+              B="$ROOT/usr/lib/$lib"
+              [ -f "$B" ] && echo "LIB $lib size=$(stat -f %z "$B") archs=$(lipo -archs "$B" 2>/dev/null)"
+            done
+            echo "--- private frameworks count=$(ls -1 "$ROOT/System/Library/PrivateFrameworks" 2>/dev/null | wc -l)"
+          } | tee inventory.txt
+
+      - name: thin
+        run: |
+          set -uo pipefail
+          mkdir -p out
+          thin_one() {
+            local src="$1" name="$2"
+            [ -f "$src" ] || return 0
+            if lipo -archs "$src" 2>/dev/null | grep -qw arm64; then
+              lipo -thin arm64 "$src" -output "out/$name" 2>/dev/null \
+                && echo "OK $name $(stat -f %z "out/$name")" \
+                || echo "FAIL lipo $name"
+            else
+              echo "SKIP $name (no arm64)"
+            fi
+          }
+          for fw in UIKit Foundation CoreFoundation CoreGraphics QuartzCore Security CoreText; do
+            thin_one "$ROOT/System/Library/Frameworks/$fw.framework/$fw" "$fw"
+          done
+          for lib in libobjc.A.dylib libSystem.B.dylib libdispatch.dylib; do
+            thin_one "$ROOT/usr/lib/$lib" "$lib"
+          done
+          ls -l out
+
+      - name: meta
+        run: |
+          set -uo pipefail
+          {
+            for f in out/*; do
+              [ -f "$f" ] || continue
+              echo "=== $(basename "$f")"
+              file "$f"
+              vtool -show-build "$f" 2>/dev/null | head -14
+              echo "-- deps $(otool -L "$f" 2>/dev/null | wc -l)"
+              otool -L "$f" 2>/dev/null | head -14
+              echo "-- exports $(nm -gU "$f" 2>/dev/null | wc -l)"
+              echo "-- undef $(nm -u "$f" 2>/dev/null | wc -l)"
+              echo "-- objc classes $(nm -gU "$f" 2>/dev/null | grep -c '_OBJC_CLASS_')"
+              echo "-- objc ivars $(nm -gU "$f" 2>/dev/null | grep -c '_OBJC_IVAR_')"
+            done
+          } | tee metadata.txt
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: simruntime-arm64
+          path: |
+            out/
+            inventory.txt
+            metadata.txt
+          if-no-files-found: warn
+          retention-days: 3

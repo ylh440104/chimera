@@ -1,9 +1,71 @@
 #include "chm_session.h"
+#include "chm_format.h"
 
+#include <errno.h>
+#include <fcntl.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+static char g_sandbox_root[512] = "/tmp/chimera";
+
+void chm_foundation_set_root(const char *root)
+{
+    if (!root)
+        return;
+    snprintf(g_sandbox_root, sizeof(g_sandbox_root), "%s", root);
+}
+
+int chm_foundation_map_path(const char *in, char *out, size_t cap)
+{
+    const char *rel = in;
+
+    if (!in || !in[0] || !out || !cap)
+        return 0;
+    if (strncmp(in, "/var/", 5) == 0) {
+        rel = in + 5;
+    } else if (strncmp(in, "/private/var/", 13) == 0) {
+        rel = in + 13;
+    } else if (strncmp(in, "/tmp/", 5) == 0) {
+        rel = in + 5;
+    } else if (strncmp(in, "/var", 4) == 0 && in[4] == 0) {
+        rel = "";
+    } else if (in[0] == '/') {
+        rel = in + 1;
+    }
+    snprintf(out, cap, "%s/%s", g_sandbox_root, rel);
+    return 1;
+}
+
+int chm_foundation_map_path_write(const char *in, char *out, size_t cap)
+{
+    char parent[1024];
+    char *slash;
+    size_t len;
+
+    if (!chm_foundation_map_path(in, out, cap))
+        return 0;
+    len = strlen(out);
+    if (len >= sizeof(parent))
+        return 1;
+    memcpy(parent, out, len + 1);
+    slash = strrchr(parent, '/');
+    if (!slash || slash == parent)
+        return 1;
+    *slash = 0;
+    for (char *p = parent + 1; *p; p++) {
+        if (*p != '/')
+            continue;
+        *p = 0;
+        mkdir(parent, 0700);
+        *p = '/';
+    }
+    mkdir(parent, 0700);
+    return 1;
+}
 
 #define FO_MAX_CLASSES 320
 #define FO_MAX_ITEMS 256
@@ -77,6 +139,16 @@ typedef struct {
     void *value;
 } fo_pair;
 
+typedef struct {
+    void *isa;
+    uint64_t magic;
+    int fd;
+    int closed;
+    char path[1024];
+} fo_handle;
+
+#define FO_HANDLE_MAGIC 0x464f484e444cull
+
 static fo_class *g_classes[FO_MAX_CLASSES];
 static int g_class_count;
 static chm_session *g_session;
@@ -112,7 +184,8 @@ static const struct {
     { "NSException", "NSObject", 32 },
     { "NSBundle", "NSObject", 32 },
     { "NSFileManager", "NSObject", 32 },
-    { "NSFileHandle", "NSObject", 32 },
+    { "NSFileHandle", "NSObject", 64 },
+    { "NSPipe", "NSObject", 64 },
     { "NSOutputStream", "NSObject", 32 },
     { "NSUserDefaults", "NSObject", 32 },
     { "NSNotificationCenter", "NSObject", 32 },
@@ -328,6 +401,25 @@ static int fo_is_dict(void *p)
     return p && ((fo_dict *)p)->magic == FO_DICT_MAGIC;
 }
 
+static int fo_is_handle(void *p)
+{
+    return p && ((fo_handle *)p)->magic == FO_HANDLE_MAGIC;
+}
+
+static void *fo_handle_new(int fd, const char *path)
+{
+    fo_handle *h = (fo_handle *)fo_alloc("NSFileHandle", sizeof(fo_handle));
+
+    if (!h)
+        return NULL;
+    h->magic = FO_HANDLE_MAGIC;
+    h->fd = fd;
+    h->closed = 0;
+    if (path)
+        snprintf(h->path, sizeof(h->path), "%s", path);
+    return h;
+}
+
 static const char *fo_bytes(void *p)
 {
     return fo_is_string(p) ? ((fo_string *)p)->bytes : "";
@@ -480,10 +572,11 @@ static int o_no(void *self)
     return 0;
 }
 
-static int o_is_kind(void *self, void *cls)
+static int o_is_kind(void *self, const char *sel, void *cls)
 {
     fo_class *c;
 
+    (void)sel;
     if (!self || !cls)
         return 0;
     c = fo_owning(*(void **)self);
@@ -495,24 +588,37 @@ static int o_is_kind(void *self, void *cls)
     return 0;
 }
 
-static int o_is_string_class(void *self)
+static int o_is_string_class(void *self, const char *sel)
 {
+    (void)sel;
     return fo_isa_is(self, "NSString");
 }
 
-static int o_is_data_class(void *self)
+static int o_is_data_class(void *self, const char *sel)
 {
+    (void)sel;
     return fo_isa_is(self, "NSData");
 }
 
-static void *s_data_utf8(void *cls, const char *bytes)
+static void *s_data_using_encoding(void *self, const char *sel, uint64_t encoding)
 {
-    (void)cls;
-    return bytes ? fo_data_new(bytes, (int64_t)strlen(bytes)) : fo_data_new(NULL, 0);
+    const char *bytes = fo_bytes(self);
+
+    (void)sel;
+    (void)encoding;
+    return fo_data_new(bytes, (int64_t)strlen(bytes));
 }
 
-static int o_is_equal(void *self, void *other)
+static void *s_data_with_bytes(void *cls, const char *sel, const void *bytes, int64_t len)
 {
+    (void)cls;
+    (void)sel;
+    return fo_data_new(bytes, len);
+}
+
+static int o_is_equal(void *self, const char *sel, void *other)
+{
+    (void)sel;
     if (self == other)
         return 1;
     if (fo_is_string(self) && fo_is_string(other))
@@ -520,16 +626,18 @@ static int o_is_equal(void *self, void *other)
     return 0;
 }
 
-static int o_compare(void *self, void *other)
+static int o_compare(void *self, const char *sel, void *other)
 {
+    (void)sel;
     if (!fo_is_string(self) || !fo_is_string(other))
         return 0;
     return strcmp(fo_bytes(self), fo_bytes(other));
 }
 
-static int o_responds(void *self, const char *sel)
+static int o_responds(void *self, const char *cmd, const char *sel)
 {
     (void)self;
+    (void)cmd;
     return chm_foundation_lookup_method(NULL, sel) != NULL;
 }
 
@@ -553,7 +661,20 @@ static int64_t o_count(void *self)
 
 static const char *o_utf8(void *self)
 {
-    return fo_is_string(self) ? ((fo_string *)self)->bytes : "";
+    if (fo_is_string(self))
+        return ((fo_string *)self)->bytes;
+    if (fo_is_data(self))
+        return (const char *)((fo_data *)self)->bytes;
+    return "";
+}
+
+static const char *o_bytes(void *self)
+{
+    if (fo_is_string(self))
+        return ((fo_string *)self)->bytes;
+    if (fo_is_data(self))
+        return (const char *)((fo_data *)self)->bytes;
+    return "";
 }
 
 static const char *o_description(void *self)
@@ -590,89 +711,42 @@ static void *s_identity(void *self)
     return fo_string_new(fo_bytes(self));
 }
 
-static void *s_with_utf8(void *cls, const char *bytes)
+static void *s_with_utf8(void *cls, const char *sel, const char *bytes)
 {
     (void)cls;
+    (void)sel;
     return fo_string_new(bytes);
 }
 
-static void *s_with_format(void *cls, void *fmt_obj, ...)
+static void *s_with_format(void *cls, const char *sel, void *fmt_obj, ...)
 {
-    const char *fmt = fo_bytes(fmt_obj);
     char buf[2048];
-    size_t used = 0;
     va_list ap;
 
     (void)cls;
+    (void)sel;
     va_start(ap, fmt_obj);
-    while (*fmt && used + 2 < sizeof(buf)) {
-        if (*fmt != '%') {
-            buf[used++] = *fmt++;
-            continue;
-        }
-        fmt++;
-        if (*fmt == '@') {
-            const char *desc = o_description(va_arg(ap, void *));
-            size_t dl;
-
-            if (!desc)
-                desc = "(null)";
-            dl = strlen(desc);
-            if (dl > sizeof(buf) - used - 1)
-                dl = sizeof(buf) - used - 1;
-            memcpy(buf + used, desc, dl);
-            used += dl;
-            fmt++;
-            continue;
-        }
-        if (*fmt == 's') {
-            const char *s = va_arg(ap, const char *);
-            size_t sl;
-
-            if (!s)
-                s = "(null)";
-            sl = strlen(s);
-            if (sl > sizeof(buf) - used - 1)
-                sl = sizeof(buf) - used - 1;
-            memcpy(buf + used, s, sl);
-            used += sl;
-            fmt++;
-            continue;
-        }
-        if (*fmt == 'd' || *fmt == 'i') {
-            int v = va_arg(ap, int);
-            int n = snprintf(buf + used, sizeof(buf) - used, "%d", v);
-
-            if (n > 0)
-                used += (size_t)n;
-            fmt++;
-            continue;
-        }
-        if (*fmt == 'l' && fmt[1] == 'd') {
-            long v = va_arg(ap, long);
-            int n = snprintf(buf + used, sizeof(buf) - used, "%ld", v);
-
-            if (n > 0)
-                used += (size_t)n;
-            fmt += 2;
-            continue;
-        }
-        if (*fmt == '%') {
-            buf[used++] = '%';
-            fmt++;
-            continue;
-        }
-        buf[used++] = '%';
-    }
+    chm_format(buf, sizeof(buf), fo_bytes(fmt_obj), ap);
     va_end(ap);
-    buf[used] = 0;
     return fo_string_new(buf);
 }
 
-static void *s_append_component(void *self, void *comp)
+static void *s_init_with_format_args(void *self, const char *sel, void *fmt_obj, va_list ap)
+{
+    char buf[2048];
+
+    (void)self;
+    (void)sel;
+    chm_format(buf, sizeof(buf), fo_bytes(fmt_obj), ap);
+    return fo_string_new(buf);
+}
+
+static void *s_append_component(void *self, const char *sel, void *comp)
 {
     const char *base = fo_bytes(self);
     const char *suffix = fo_bytes(comp);
+
+    (void)sel;
     size_t blen = strlen(base);
     size_t slen = strlen(suffix);
     char *buf;
@@ -691,10 +765,12 @@ static void *s_append_component(void *self, void *comp)
     return out;
 }
 
-static void *s_append_string(void *self, void *tail)
+static void *s_append_string(void *self, const char *sel, void *tail)
 {
     const char *a = fo_bytes(self);
     const char *b = fo_bytes(tail);
+
+    (void)sel;
     size_t total = strlen(a) + strlen(b) + 1;
     char *buf = malloc(total);
     void *out;
@@ -783,7 +859,7 @@ static int s_is_absolute(void *self)
     return base && base[0] == '/';
 }
 
-static void *s_split(void *self, void *sep)
+static void *s_split(void *self, const char *sel, void *sep)
 {
     const char *base = fo_bytes(self);
     const char *s = fo_bytes(sep);
@@ -791,6 +867,8 @@ static void *s_split(void *self, void *sep)
     char *copy;
     char *cursor;
     size_t seplen;
+
+    (void)sel;
 
     if (!s[0])
         return NULL;
@@ -821,12 +899,14 @@ static void *s_split(void *self, void *sep)
     return arr;
 }
 
-static void *s_substring_to(void *self, int64_t idx)
+static void *s_substring_to(void *self, const char *sel, int64_t idx)
 {
     const char *base = fo_bytes(self);
     int64_t len = (int64_t)strlen(base);
     char *buf;
     void *out;
+
+    (void)sel;
 
     if (idx < 0)
         idx = 0;
@@ -842,10 +922,12 @@ static void *s_substring_to(void *self, int64_t idx)
     return out;
 }
 
-static void *s_substring_from(void *self, int64_t idx)
+static void *s_substring_from(void *self, const char *sel, int64_t idx)
 {
     const char *base = fo_bytes(self);
     int64_t len = (int64_t)strlen(base);
+
+    (void)sel;
 
     if (idx < 0 || idx > len)
         return fo_string_new("");
@@ -882,61 +964,69 @@ static void *s_upper(void *self)
     return out;
 }
 
-static int s_has_prefix(void *self, void *prefix)
+static int s_has_prefix(void *self, const char *sel, void *prefix)
 {
+    (void)sel;
     return strncmp(fo_bytes(self), fo_bytes(prefix), strlen(fo_bytes(prefix))) == 0;
 }
 
-static int s_has_suffix(void *self, void *suffix)
+static int s_has_suffix(void *self, const char *sel, void *suffix)
 {
     const char *a = fo_bytes(self);
     const char *b = fo_bytes(suffix);
     size_t la = strlen(a);
     size_t lb = strlen(b);
 
+    (void)sel;
     return lb <= la && strcmp(a + la - lb, b) == 0;
 }
 
-static void *a_object_at(void *self, int64_t idx)
+static void *a_object_at(void *self, const char *sel, int64_t idx)
 {
     fo_array *a = self;
 
+    (void)sel;
     if (!fo_is_array(a) || idx < 0 || idx >= a->count)
         return fo_string_new("");
     return a->items[idx];
 }
 
-static void *a_first(void *self)
+static void *a_first(void *self, const char *sel)
 {
-    return a_object_at(self, 0);
+    (void)sel;
+    return a_object_at(self, NULL, 0);
 }
 
-static void *a_last(void *self)
+static void *a_last(void *self, const char *sel)
 {
     fo_array *a = self;
 
+    (void)sel;
     if (!fo_is_array(a) || a->count == 0)
         return fo_string_new("");
     return a->items[a->count - 1];
 }
 
-static void a_add(void *self, void *obj)
+static void a_add(void *self, const char *sel, void *obj)
 {
     fo_array *a = self;
 
+    (void)sel;
     if (!fo_is_array(a))
         return;
     if (a->count < FO_MAX_ITEMS)
         a->items[a->count++] = obj;
 }
 
-static void *a_joined(void *self, void *sep)
+static void *a_joined(void *self, const char *sel, void *sep)
 {
     fo_array *a = self;
     const char *s = fo_bytes(sep);
     size_t total = 1;
     char *buf;
     void *out;
+
+    (void)sel;
 
     if (!fo_is_array(a))
         return NULL;
@@ -955,10 +1045,12 @@ static void *a_joined(void *self, void *sep)
     return out;
 }
 
-static void *d_value(void *self, void *key)
+static void *d_value(void *self, const char *sel, void *key)
 {
     fo_dict *d = self;
     const char *k = fo_bytes(key);
+
+    (void)sel;
 
     if (!fo_is_dict(d))
         return fo_string_new("");
@@ -969,9 +1061,11 @@ static void *d_value(void *self, void *key)
     return fo_string_new("");
 }
 
-static void d_set(void *self, void *obj, void *key)
+static void d_set(void *self, const char *sel, void *obj, void *key)
 {
     fo_dict *d = self;
+
+    (void)sel;
 
     if (!fo_is_dict(d))
         return;
@@ -1012,31 +1106,303 @@ static void *d_values(void *self)
     return a;
 }
 
-static int f_exists(void *self, void *path)
+static int f_exists(void *self, const char *sel, void *path)
 {
+    char mapped[1024];
+    struct stat st;
+
     (void)self;
-    (void)path;
-    return 0;
+    (void)sel;
+    if (!chm_foundation_map_path(fo_bytes(path), mapped, sizeof(mapped)))
+        return 0;
+    return stat(mapped, &st) == 0 ? 1 : 0;
 }
 
-static int f_create_dir(void *self, void *path, int intermediate, void *attrs, void **error)
+static void *make_error(const char *domain, long code, const char *desc)
 {
+    fo_dict *d = (fo_dict *)fo_dict_new();
+
+    (void)domain;
+    (void)code;
+    if (!d)
+        return NULL;
+    d->keys[d->count] = fo_string_new("NSLocalizedDescription");
+    d->values[d->count] = fo_string_new(desc ? desc : "error");
+    d->count++;
+    return d;
+}
+
+static int mkdir_p(const char *path)
+{
+    char tmp[1024];
+    size_t len;
+    size_t i;
+
+    len = strlen(path);
+    if (len >= sizeof(tmp) || !len)
+        return -1;
+    memcpy(tmp, path, len + 1);
+    for (i = 1; i < len; i++) {
+        if (tmp[i] != '/')
+            continue;
+        tmp[i] = 0;
+        mkdir(tmp, 0700);
+        tmp[i] = '/';
+    }
+    return mkdir(tmp, 0700);
+}
+
+static int ensure_parent(const char *path)
+{
+    char tmp[1024];
+    char *slash;
+
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    slash = strrchr(tmp, '/');
+    if (!slash || slash == tmp)
+        return 0;
+    *slash = 0;
+    return mkdir_p(tmp);
+}
+
+static int f_create_dir(void *self, const char *sel, void *path, int intermediate, void *attrs,
+                        void **error)
+{
+    char mapped[1024];
+    int rc;
+
     (void)self;
-    (void)path;
+    (void)sel;
     (void)intermediate;
     (void)attrs;
     if (error)
         *error = NULL;
+    if (!chm_foundation_map_path(fo_bytes(path), mapped, sizeof(mapped)))
+        return 0;
+    rc = mkdir_p(mapped);
+    if (g_session)
+        chm_session_log(g_session, "mkdir [%s] rc=%d", mapped, rc);
+    if (rc == 0 || errno == EEXIST)
+        return 1;
+    if (error)
+        *error = make_error("NSCocoaErrorDomain", 516, "create directory failed");
     return 0;
 }
 
-static int f_remove(void *self, void *path, void **error)
+static int f_remove(void *self, const char *sel, void *path, void **error)
 {
+    char mapped[1024];
+    struct stat st;
+
     (void)self;
-    (void)path;
+    (void)sel;
     if (error)
         *error = NULL;
+    if (!chm_foundation_map_path(fo_bytes(path), mapped, sizeof(mapped)))
+        return 0;
+    if (stat(mapped, &st) != 0) {
+        if (error)
+            *error = make_error("NSCocoaErrorDomain", 4, "no such file");
+        return 0;
+    }
+    if (S_ISDIR(st.st_mode)) {
+        if (rmdir(mapped) == 0)
+            return 1;
+    } else if (unlink(mapped) == 0) {
+        return 1;
+    }
+    if (error)
+        *error = make_error("NSCocoaErrorDomain", 4, "remove failed");
     return 0;
+}
+
+static int f_create_file(void *self, const char *sel, void *path, void *contents, void *attrs)
+{
+    char mapped[1024];
+    int fd;
+    int ok = 1;
+
+    (void)self;
+    (void)sel;
+    (void)attrs;
+    if (!chm_foundation_map_path(fo_bytes(path), mapped, sizeof(mapped)))
+        return 0;
+    ensure_parent(mapped);
+    fd = open(mapped, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0)
+        return 0;
+    if (fo_is_data(contents)) {
+        const uint8_t *p = ((fo_data *)contents)->bytes;
+        size_t left = (size_t)((fo_data *)contents)->length;
+
+        while (left) {
+            ssize_t n = write(fd, p, left);
+
+            if (n <= 0) {
+                ok = 0;
+                break;
+            }
+            p += n;
+            left -= (size_t)n;
+        }
+    }
+    close(fd);
+    return ok;
+}
+
+static int f_move(void *self, const char *sel, void *from, void *to, void **error)
+{
+    char a[1024];
+    char b[1024];
+
+    (void)self;
+    (void)sel;
+    if (error)
+        *error = NULL;
+    if (!chm_foundation_map_path(fo_bytes(from), a, sizeof(a)))
+        return 0;
+    if (!chm_foundation_map_path(fo_bytes(to), b, sizeof(b)))
+        return 0;
+    ensure_parent(b);
+    if (rename(a, b) == 0)
+        return 1;
+    if (error)
+        *error = make_error("NSCocoaErrorDomain", 4, "move failed");
+    return 0;
+}
+
+static int copy_file_bytes(const char *src, const char *dst)
+{
+    int in;
+    int out;
+    char buf[8192];
+    ssize_t n;
+
+    in = open(src, O_RDONLY);
+    if (in < 0)
+        return 0;
+    ensure_parent(dst);
+    out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (out < 0) {
+        close(in);
+        return 0;
+    }
+    while ((n = read(in, buf, sizeof(buf))) > 0) {
+        ssize_t off = 0;
+
+        while (off < n) {
+            ssize_t w = write(out, buf + off, (size_t)(n - off));
+
+            if (w <= 0) {
+                close(in);
+                close(out);
+                return 0;
+            }
+            off += w;
+        }
+    }
+    close(in);
+    close(out);
+    return 1;
+}
+
+static int f_copy(void *self, const char *sel, void *from, void *to, void **error)
+{
+    char a[1024];
+    char b[1024];
+
+    (void)self;
+    (void)sel;
+    if (error)
+        *error = NULL;
+    if (!chm_foundation_map_path(fo_bytes(from), a, sizeof(a)))
+        return 0;
+    if (!chm_foundation_map_path(fo_bytes(to), b, sizeof(b)))
+        return 0;
+    if (copy_file_bytes(a, b))
+        return 1;
+    if (error)
+        *error = make_error("NSCocoaErrorDomain", 4, "copy failed");
+    return 0;
+}
+
+static void *read_whole_file(const char *mapped)
+{
+    int fd;
+    uint8_t *buf = NULL;
+    size_t cap = 0;
+    size_t len = 0;
+    void *out;
+
+    fd = open(mapped, O_RDONLY);
+    if (fd < 0)
+        return NULL;
+    for (;;) {
+        ssize_t n;
+
+        if (len == cap) {
+            size_t ncap = cap ? cap * 2 : 4096;
+            uint8_t *nb = realloc(buf, ncap);
+
+            if (!nb)
+                break;
+            buf = nb;
+            cap = ncap;
+        }
+        n = read(fd, buf + len, cap - len);
+        if (n <= 0)
+            break;
+        len += (size_t)n;
+    }
+    close(fd);
+    out = fo_data_new(buf, (int64_t)len);
+    free(buf);
+    return out;
+}
+
+static void *f_contents_at_path(void *self, const char *sel, void *path)
+{
+    char mapped[1024];
+
+    (void)self;
+    (void)sel;
+    if (!chm_foundation_map_path(fo_bytes(path), mapped, sizeof(mapped)))
+        return NULL;
+    return read_whole_file(mapped);
+}
+
+static void *f_attrs_at_path(void *self, const char *sel, void *path, void **error)
+{
+    char mapped[1024];
+    struct stat st;
+    fo_dict *d;
+
+    (void)self;
+    (void)sel;
+    if (error)
+        *error = NULL;
+    if (!chm_foundation_map_path(fo_bytes(path), mapped, sizeof(mapped))) {
+        if (error)
+            *error = make_error("NSCocoaErrorDomain", 4, "bad path");
+        return NULL;
+    }
+    if (stat(mapped, &st) != 0) {
+        if (error)
+            *error = make_error("NSCocoaErrorDomain", 4, "no such file");
+        return NULL;
+    }
+    d = (fo_dict *)fo_dict_new();
+    if (!d)
+        return NULL;
+    d->keys[d->count] = fo_string_new("NSFileSize");
+    d->values[d->count] = fo_string_new("");
+    ((fo_string *)d->values[d->count])->length = (int64_t)st.st_size;
+    d->count++;
+    d->keys[d->count] = fo_string_new("NSFileType");
+    d->values[d->count] = fo_string_new(S_ISDIR(st.st_mode) ? "NSFileTypeDirectory"
+                                                           : "NSFileTypeRegular");
+    d->count++;
+    return d;
 }
 
 static void *f_urls(void)
@@ -1052,6 +1418,271 @@ static void *f_urls(void)
 static void *f_contents(void)
 {
     return fo_array_new();
+}
+
+static void *h_write_data(void *self, const char *sel, void *data)
+{
+    fo_handle *h = self;
+    const uint8_t *p;
+    size_t left;
+
+    (void)sel;
+
+    if (!fo_is_handle(h) || h->closed || !fo_is_data(data))
+        return NULL;
+    p = ((fo_data *)data)->bytes;
+    left = (size_t)((fo_data *)data)->length;
+    while (left) {
+        ssize_t n = write(h->fd, p, left);
+
+        if (n <= 0)
+            break;
+        p += n;
+        left -= (size_t)n;
+    }
+    return NULL;
+}
+
+static void h_close(void *self)
+{
+    fo_handle *h = self;
+
+    if (!fo_is_handle(h) || h->closed)
+        return;
+    close(h->fd);
+    h->closed = 1;
+}
+
+static void *h_read_all(void *self)
+{
+    fo_handle *h = self;
+    uint8_t *buf = NULL;
+    size_t cap = 0;
+    size_t len = 0;
+    void *out;
+
+    if (!fo_is_handle(h) || h->closed)
+        return fo_data_new(NULL, 0);
+    for (;;) {
+        ssize_t n;
+
+        if (len == cap) {
+            size_t ncap = cap ? cap * 2 : 4096;
+            uint8_t *nb = realloc(buf, ncap);
+
+            if (!nb)
+                break;
+            buf = nb;
+            cap = ncap;
+        }
+        n = read(h->fd, buf + len, cap - len);
+        if (n <= 0)
+            break;
+        len += (size_t)n;
+    }
+    out = fo_data_new(buf, (int64_t)len);
+    free(buf);
+    return out;
+}
+
+static void *h_read_len(void *self, const char *sel, int64_t want)
+{
+    fo_handle *h = self;
+    uint8_t *buf;
+    size_t got = 0;
+
+    (void)sel;
+
+    if (!fo_is_handle(h) || h->closed || want <= 0)
+        return fo_data_new(NULL, 0);
+    buf = malloc((size_t)want);
+    if (!buf)
+        return NULL;
+    while (got < (size_t)want) {
+        ssize_t n = read(h->fd, buf + got, (size_t)want - got);
+
+        if (n <= 0)
+            break;
+        got += (size_t)n;
+    }
+    {
+        void *out = fo_data_new(buf, (int64_t)got);
+
+        free(buf);
+        return out;
+    }
+}
+
+static int64_t h_offset(void *self)
+{
+    fo_handle *h = self;
+
+    if (!fo_is_handle(h) || h->closed)
+        return -1;
+    return (int64_t)lseek(h->fd, 0, SEEK_CUR);
+}
+
+static int h_seek(void *self, const char *sel, int64_t off)
+{
+    fo_handle *h = self;
+
+    (void)sel;
+
+    if (!fo_is_handle(h) || h->closed)
+        return -1;
+    return lseek(h->fd, (off_t)off, SEEK_SET) < 0 ? -1 : 0;
+}
+
+static int h_seek_end(void *self)
+{
+    fo_handle *h = self;
+
+    if (!fo_is_handle(h) || h->closed)
+        return -1;
+    return (int64_t)lseek(h->fd, 0, SEEK_END);
+}
+
+static void h_sync(void *self)
+{
+    fo_handle *h = self;
+
+    if (fo_is_handle(h) && !h->closed)
+        fsync(h->fd);
+}
+
+static int h_fd(void *self)
+{
+    fo_handle *h = self;
+
+    return fo_is_handle(h) ? h->fd : -1;
+}
+
+static void *open_handle(void *path, int flags)
+{
+    char mapped[1024];
+    int fd;
+
+    if (!chm_foundation_map_path(fo_bytes(path), mapped, sizeof(mapped)))
+        return NULL;
+    if ((flags & O_CREAT) != 0)
+        ensure_parent(mapped);
+    fd = open(mapped, flags, 0600);
+    if (fd < 0)
+        return NULL;
+    return fo_handle_new(fd, mapped);
+}
+
+static void *h_for_reading(void *self, const char *sel, void *path)
+{
+    (void)self;
+    (void)sel;
+    return open_handle(path, O_RDONLY);
+}
+
+static void *h_for_writing(void *self, const char *sel, void *path)
+{
+    (void)self;
+    (void)sel;
+    return open_handle(path, O_WRONLY | O_CREAT | O_TRUNC);
+}
+
+static void *h_for_updating(void *self, const char *sel, void *path)
+{
+    (void)self;
+    (void)sel;
+    return open_handle(path, O_RDWR | O_CREAT);
+}
+
+static void *d_data_with_file(void *cls, const char *sel, void *path)
+{
+    (void)cls;
+    (void)sel;
+    return f_contents_at_path(NULL, NULL, path);
+}
+
+static int d_write_file(void *self, const char *sel, void *path, int atomically)
+{
+    char mapped[1024];
+
+    (void)sel;
+    (void)atomically;
+    if (!fo_is_data(self))
+        return 0;
+    if (!chm_foundation_map_path(fo_bytes(path), mapped, sizeof(mapped)))
+        return 0;
+    ensure_parent(mapped);
+    {
+        int fd = open(mapped, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        const uint8_t *p;
+        size_t left;
+        int ok = 1;
+
+        if (fd < 0)
+            return 0;
+        p = ((fo_data *)self)->bytes;
+        left = (size_t)((fo_data *)self)->length;
+        while (left) {
+            ssize_t n = write(fd, p, left);
+
+            if (n <= 0) {
+                ok = 0;
+                break;
+            }
+            p += n;
+            left -= (size_t)n;
+        }
+        close(fd);
+        return ok;
+    }
+}
+
+static void *str_with_contents_of_file(void *cls, const char *sel, void *path, uint64_t enc,
+                                      void **error)
+{
+    void *data = f_contents_at_path(NULL, NULL, path);
+
+    (void)cls;
+    (void)sel;
+    (void)enc;
+    if (error)
+        *error = NULL;
+    if (!fo_is_data(data))
+        return NULL;
+    {
+        fo_data *d = data;
+        char *buf = malloc((size_t)d->length + 1);
+        void *out;
+
+        if (!buf)
+            return NULL;
+        if (d->length)
+            memcpy(buf, d->bytes, (size_t)d->length);
+        buf[d->length] = 0;
+        out = fo_string_new(buf);
+        free(buf);
+        return out;
+    }
+}
+
+static int str_write_to_file(void *self, const char *sel, void *path, int atomically, uint64_t enc,
+                             void **error)
+{
+    const char *bytes = fo_bytes(self);
+    void *data;
+    int ok;
+
+    (void)sel;
+    (void)atomically;
+    (void)enc;
+    if (error)
+        *error = NULL;
+    data = fo_data_new(bytes, (int64_t)strlen(bytes));
+    if (!data)
+        return 0;
+    ok = d_write_file(data, NULL, path, 1);
+    if (!ok && error)
+        *error = make_error("NSCocoaErrorDomain", 4, "write failed");
+    return ok;
 }
 
 static void *proc_arguments(void)
@@ -1110,7 +1741,7 @@ static const struct {
     { "count", (void *)o_count },
     { "UTF8String", (void *)o_utf8 },
     { "fileSystemRepresentation", (void *)o_utf8 },
-    { "bytes", (void *)o_utf8 },
+    { "bytes", (void *)o_bytes },
     { "absoluteString", (void *)s_identity },
     { "path", (void *)s_identity },
     { "lastPathComponent", (void *)s_last_component },
@@ -1153,6 +1784,30 @@ static const struct {
     { "fileExistsAtPath:isDirectory:", (void *)f_exists },
     { "createDirectoryAtPath:withIntermediateDirectories:attributes:error:", (void *)f_create_dir },
     { "removeItemAtPath:error:", (void *)f_remove },
+    { "createFileAtPath:contents:attributes:", (void *)f_create_file },
+    { "moveItemAtPath:toPath:error:", (void *)f_move },
+    { "copyItemAtPath:toPath:error:", (void *)f_copy },
+    { "contentsAtPath:", (void *)f_contents_at_path },
+    { "attributesOfItemAtPath:error:", (void *)f_attrs_at_path },
+    { "fileHandleForReadingAtPath:", (void *)h_for_reading },
+    { "fileHandleForWritingAtPath:", (void *)h_for_writing },
+    { "fileHandleForUpdatingAtPath:", (void *)h_for_updating },
+    { "writeData:", (void *)h_write_data },
+    { "readDataToEndOfFile", (void *)h_read_all },
+    { "readDataToEndOfFileAndReturnError:", (void *)h_read_all },
+    { "readDataOfLength:", (void *)h_read_len },
+    { "closeFile", (void *)h_close },
+    { "closeAndReturnError:", (void *)h_close },
+    { "offsetInFile", (void *)h_offset },
+    { "seekToFileOffset:", (void *)h_seek },
+    { "seekToEndOfFile", (void *)h_seek_end },
+    { "synchronizeFile", (void *)h_sync },
+    { "fileDescriptor", (void *)h_fd },
+    { "dataWithContentsOfFile:", (void *)d_data_with_file },
+    { "writeToFile:atomically:", (void *)d_write_file },
+    { "stringWithContentsOfFile:encoding:error:", (void *)str_with_contents_of_file },
+    { "writeToFile:atomically:encoding:error:", (void *)str_write_to_file },
+    { "initWithFormat:arguments:", (void *)s_init_with_format_args },
     { "URLsForDirectory:inDomains:", (void *)f_urls },
     { "URLForDirectory:inDomain:appropriateForURL:create:error:", (void *)f_urls },
     { "contentsOfDirectoryAtPath:error:", (void *)f_contents },
@@ -1168,8 +1823,9 @@ static const struct {
     { "isiOSAppOnVision", (void *)o_no },
     { "isNSString__", (void *)o_is_string_class },
     { "isNSData__", (void *)o_is_data_class },
-    { "dataUsingEncoding:", (void *)s_data_utf8 },
-    { "dataWithBytes:length:", (void *)s_data_utf8 },
+    { "dataUsingEncoding:", (void *)s_data_using_encoding },
+    { "dataUsingEncoding:allowLossyConversion:", (void *)s_data_using_encoding },
+    { "dataWithBytes:length:", (void *)s_data_with_bytes },
     { NULL, NULL }
 };
 
@@ -1196,6 +1852,7 @@ void chm_foundation_init(chm_session *s)
     g_session = s;
     g_class_count = 0;
     g_pair_count = 0;
+    chm_format_set_describer((chm_desc_fn)o_description);
     for (i = 0; g_seed[i].name; i++) {
         fo_class *c;
 

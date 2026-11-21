@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "chm_session.h"
 
+#include <dlfcn.h>
 #include <setjmp.h>
 #include <signal.h>
 #include <stdint.h>
@@ -8,42 +9,46 @@
 #include <string.h>
 #include <ucontext.h>
 #include <unistd.h>
-#include <dlfcn.h>
 
 #define CHM_ALTSTACK 65536
 
 static sigjmp_buf g_jump;
+static sigjmp_buf g_probe_jump;
+static volatile sig_atomic_t g_probing;
 static volatile sig_atomic_t g_armed;
 static char g_altstack[CHM_ALTSTACK];
 static char g_fault[512];
 static uint64_t g_pc;
+static uint64_t g_fp;
 static uint64_t g_lr;
 static uint64_t g_sp;
 static uint64_t g_far;
 static int g_signal;
 static int g_installed;
 
-static uint64_t g_regs[4];
-
-static uint64_t g_self_base;
-
 static void handler(int sig, siginfo_t *info, void *ctx)
 {
     ucontext_t *uc = ctx;
 
+    if (g_probing)
+        siglongjmp(g_probe_jump, 1);
+    if (!g_armed) {
+        dprintf(2, "[chimera] fault outside guard sig=%d pc=0x%llx\n", sig,
+                uc ? (unsigned long long)uc->uc_mcontext.pc : 0ULL);
+        _exit(9);
+    }
     g_signal = sig;
     g_far = info ? (uint64_t)(uintptr_t)info->si_addr : 0;
     if (uc) {
+        int i;
+
         g_pc = (uint64_t)uc->uc_mcontext.pc;
         g_lr = (uint64_t)uc->uc_mcontext.regs[30];
         g_sp = (uint64_t)uc->uc_mcontext.sp;
-        g_regs[0] = (uint64_t)uc->uc_mcontext.regs[0];
-        g_regs[1] = (uint64_t)uc->uc_mcontext.regs[1];
-        g_regs[2] = (uint64_t)uc->uc_mcontext.regs[2];
-        g_regs[3] = (uint64_t)uc->uc_mcontext.regs[3];
+        g_fp = (uint64_t)uc->uc_mcontext.regs[29];
+        for (i = 0; i < 31; i++)
+            (void)i;
     }
-    if (!g_armed)
-        _exit(9);
     g_armed = 0;
     siglongjmp(g_jump, 1);
 }
@@ -68,7 +73,6 @@ void chm_trap_install(void)
     ss.ss_size = sizeof(g_altstack);
     ss.ss_flags = 0;
     sigaltstack(&ss, NULL);
-    g_self_base = (uint64_t)(uintptr_t)&chm_trap_install;
     g_installed = 1;
 }
 
@@ -86,42 +90,91 @@ static void run_body(void *p)
     a->rc = chm_run(a->img, a->argc, a->argv);
 }
 
-static void scan_stack(chm_session *s, uint64_t sp)
+static int probe_read(uint64_t addr, uint64_t *out)
 {
-    const uint64_t *p;
-    uint64_t limit;
-    int shown = 0;
+    volatile int ok = 0;
+
+    if (!addr || (addr & 7))
+        return 0;
+    g_probing = 1;
+    if (sigsetjmp(g_probe_jump, 1) == 0) {
+        *out = *(volatile uint64_t *)(uintptr_t)addr;
+        ok = 1;
+    }
+    g_probing = 0;
+    return (int)ok;
+}
+
+static void describe_value(chm_session *s, int slot, uint64_t v)
+{
+    int k;
+
+    for (k = 0; k < s->image_count; k++) {
+        chm_image *img = &s->images[k];
+        uint32_t q;
+
+        for (q = 0; q < img->nsegs; q++) {
+            chm_segment *sg = &img->segs[q];
+            uint64_t start = sg->vmaddr + img->slide;
+            int j;
+
+            if (!sg->vmsize || v < start || v >= start + sg->vmsize)
+                continue;
+            for (j = 0; j < (int)sg->nsects; j++) {
+                uint64_t ss = sg->sects[j].addr + img->slide;
+
+                if (v >= ss && v < ss + sg->sects[j].size) {
+                    chm_session_log(s, "  slot %d 0x%llx img%d %s+0x%llx", slot,
+                                    (unsigned long long)v, k, sg->sects[j].sect,
+                                    (unsigned long long)(v - ss));
+                    return;
+                }
+            }
+            chm_session_log(s, "  slot %d 0x%llx img%d %s+0x%llx", slot,
+                            (unsigned long long)v, k, sg->name,
+                            (unsigned long long)(v - start));
+            return;
+        }
+    }
+}
+
+static void dump_stack(chm_session *s, uint64_t sp)
+{
     int i;
 
     if (!s || !sp)
         return;
-    p = (const uint64_t *)(uintptr_t)sp;
-    limit = sp + 8192;
-    for (; (uint64_t)(uintptr_t)p < limit && shown < 16; p++) {
-        uint64_t v = *p;
+    chm_session_log(s, "stack base 0x%llx", (unsigned long long)sp);
+    for (i = 0; i < 64; i++) {
+        uint64_t v = 0;
 
+        if (!probe_read(sp + (uint64_t)i * 8, &v))
+            break;
         if (!v)
             continue;
-        for (i = 0; i < s->image_count; i++) {
-            uint64_t lo = s->images[i].vm_min + s->images[i].slide;
-            uint64_t hi = s->images[i].vm_max + s->images[i].slide;
+        describe_value(s, i, v);
+    }
+    {
+        uint64_t fp = g_fp;
+        int n;
 
-            if (v >= lo && v < hi) {
-                shown++;
-                chm_session_log(s, "stack[%d] image[%d]+0x%llx",
-                                shown, i, (unsigned long long)(v - lo));
+        for (n = 0; n < 16 && fp; n++) {
+            uint64_t next = 0;
+            uint64_t ret = 0;
+
+            if (!probe_read(fp, &next) || !probe_read(fp + 8, &ret))
                 break;
-            }
+            chm_session_log(s, "  frame %d ret 0x%llx", n, (unsigned long long)ret);
+            if (!ret || next <= fp)
+                break;
+            fp = next;
         }
     }
-    if (!shown)
-        chm_session_log(s, "stack scan: no image pointers found near sp");
 }
 
 static void describe_pc(chm_session *s, uint64_t pc)
 {
     int i;
-    uint32_t k;
 
     if (!s)
         return;
@@ -130,29 +183,8 @@ static void describe_pc(chm_session *s, uint64_t pc)
 
         if (pc < img->vm_min + img->slide || pc >= img->vm_max + img->slide)
             continue;
-        chm_session_log(s, "fault inside image[%d] %s offset 0x%llx",
-                        i, s->image_paths[i], (unsigned long long)(pc - img->vm_min - img->slide));
-        for (k = 0; k < img->nsegs; k++) {
-            chm_segment *seg = &img->segs[k];
-
-            if (!seg->vmsize || !strcmp(seg->name, "__PAGEZERO"))
-                continue;
-            uint64_t start = seg->vmaddr + img->slide;
-
-            if (pc >= start && pc < start + seg->vmsize) {
-                chm_session_log(s, "fault in segment %s +0x%llx", seg->name,
-                                (unsigned long long)(pc - start));
-                for (uint32_t j = 0; j < seg->nsects; j++) {
-                    chm_section *sec = &seg->sects[j];
-                    uint64_t sstart = sec->addr + img->slide;
-
-                    if (pc >= sstart && pc < sstart + sec->size)
-                        chm_session_log(s, "fault in section %s +0x%llx", sec->sect,
-                                        (unsigned long long)(pc - sstart));
-                }
-                return;
-            }
-        }
+        chm_session_log(s, "fault inside image[%d] %s offset 0x%llx", i, s->image_paths[i],
+                        (unsigned long long)(pc - img->vm_min - img->slide));
         return;
     }
     chm_session_log(s, "fault pc outside loaded images");
@@ -171,7 +203,7 @@ int chm_session_execute(chm_session *s, chm_image *img, int argc, char **argv)
     a.argc = argc;
     a.argv = argv;
     a.rc = -1;
-    g_pc = g_lr = g_sp = g_far = 0;
+    g_pc = g_lr = g_sp = g_far = g_fp = 0;
     g_signal = 0;
     g_armed = 1;
     if (sigsetjmp(g_jump, 1) == 0) {
@@ -185,8 +217,8 @@ int chm_session_execute(chm_session *s, chm_image *img, int argc, char **argv)
     {
         Dl_info dp;
         Dl_info dl;
-        char *pnm = "?";
-        char *lnm = "?";
+        const char *pnm = "?";
+        const char *lnm = "?";
         uint64_t poff = 0;
         uint64_t loff = 0;
 
@@ -194,26 +226,23 @@ int chm_session_execute(chm_session *s, chm_image *img, int argc, char **argv)
         memset(&dl, 0, sizeof(dl));
         if (dladdr((void *)(uintptr_t)g_pc, &dp)) {
             if (dp.dli_sname)
-                pnm = (char *)dp.dli_sname;
+                pnm = dp.dli_sname;
             poff = g_pc - (uint64_t)(uintptr_t)dp.dli_fbase;
         }
         if (dladdr((void *)(uintptr_t)g_lr, &dl)) {
             if (dl.dli_sname)
-                lnm = (char *)dl.dli_sname;
+                lnm = dl.dli_sname;
             loff = g_lr - (uint64_t)(uintptr_t)dl.dli_fbase;
         }
         snprintf(g_fault, sizeof(g_fault),
-                 "signal %d fault 0x%llx pc %s+0x%llx(%s) lr %s+0x%llx(%s) x0 0x%llx x1 0x%llx",
+                 "signal %d fault 0x%llx at %s+0x%llx(%s) from %s+0x%llx(%s)",
                  g_signal, (unsigned long long)g_far,
-                 dp.dli_fname ? dp.dli_fname : "?",
-                 (unsigned long long)poff, pnm,
-                 dl.dli_fname ? dl.dli_fname : "?",
-                 (unsigned long long)loff, lnm,
-                 (unsigned long long)g_regs[0], (unsigned long long)g_regs[1]);
+                 dp.dli_fname ? dp.dli_fname : "?", (unsigned long long)poff, pnm,
+                 dl.dli_fname ? dl.dli_fname : "?", (unsigned long long)loff, lnm);
     }
     chm_session_log(s, "%s", g_fault);
     describe_pc(s, g_pc);
-    scan_stack(s, g_sp);
+    dump_stack(s, g_sp);
     chm_objc_dump_trace(s);
     return -2;
 }

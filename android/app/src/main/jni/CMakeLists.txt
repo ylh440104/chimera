@@ -15,6 +15,7 @@ add_library(chimera SHARED
         ${ROOT}/src/dispatch.c
         ${ROOT}/src/foundation.c
         ${ROOT}/src/frameworks.c
+        ${ROOT}/src/format.c
         ${ROOT}/src/trap.c
         ${ROOT}/src/loader.c)
 

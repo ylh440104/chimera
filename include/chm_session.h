@@ -109,6 +109,9 @@ void *chm_foundation_lookup_class(const char *name);
 void *chm_foundation_lookup_metaclass(const char *name);
 void *chm_foundation_lookup_method(const char *cls_name, const char *sel);
 void chm_foundation_note_missing_selector(const char *cls_name, const char *sel);
+void chm_foundation_set_root(const char *root);
+int chm_foundation_map_path(const char *in, char *out, size_t cap);
+int chm_foundation_map_path_write(const char *in, char *out, size_t cap);
 int chm_objc_session_add_method(chm_session *s, const chm_method_reg *m);
 
 void chm_libc_set_session(chm_session *s);

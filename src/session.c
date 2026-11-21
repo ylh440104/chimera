@@ -1,5 +1,6 @@
 #include "chm_session.h"
 #include "chm_runtime.h"
+#include "chm_format.h"
 
 #include <dirent.h>
 #include <stdarg.h>
@@ -315,7 +316,7 @@ void chm_session_log(chm_session *s, const char *fmt, ...)
     if (!s || !s->log_buf)
         return;
     va_start(ap, fmt);
-    vsnprintf(line, sizeof(line), fmt, ap);
+    chm_format(line, sizeof(line), fmt, ap);
     va_end(ap);
     n = strlen(line);
     if (s->log_len + n + 2 < s->log_cap) {
@@ -440,8 +441,6 @@ void chm_session_report(chm_session *s, char *out, size_t cap)
 
         snprintf(out + used, cap - used, "missing distinct=%d:", s->missing_count);
         for (i = 0; i < s->missing_count && shown < 12; i++) {
-            if (s->missing[i].weak)
-                continue;
             used = strlen(out);
             snprintf(out + used, cap - used, " %s", s->missing[i].name);
             shown++;

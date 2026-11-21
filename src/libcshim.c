@@ -1,9 +1,11 @@
 #include "chm_runtime.h"
 #include "chm_session.h"
+#include "chm_format.h"
 
 #include <dirent.h>
 #include <fcntl.h>
 #include <math.h>
+#include <stdarg.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -22,6 +24,8 @@ typedef struct {
 } chm_entry;
 
 static int g_resolved;
+
+static chm_session *g_null_log_session;
 
 void chm_runtime_init(void)
 {
@@ -54,31 +58,45 @@ static void *memchr_impl(const void *p, int c, size_t n)
 static void *memcpy_chk_impl(void *d, const void *s, size_t n, size_t cap)
 {
     (void)cap;
-    return memcpy(d, s, n);
+    if (!d || !s || !n)
+        return d;
+    return __builtin_memcpy(d, s, n);
 }
 
 static void *memmove_chk_impl(void *d, const void *s, size_t n, size_t cap)
 {
     (void)cap;
-    return memmove(d, s, n);
+    if (!d || !s || !n)
+        return d;
+    return __builtin_memmove(d, s, n);
 }
 
 static void *memset_chk_impl(void *p, int v, size_t n, size_t cap)
 {
     (void)cap;
-    return memset(p, v, n);
+    if (!p || !n)
+        return p;
+    return __builtin_memset(p, v, n);
 }
 
 static char *strcpy_chk_impl(char *d, const char *s, size_t cap)
 {
     (void)cap;
-    return strcpy(d, s);
+    if (!d)
+        return d;
+    if (!s) {
+        d[0] = 0;
+        return d;
+    }
+    return __builtin_strcpy(d, s);
 }
 
 static char *strcat_chk_impl(char *d, const char *s, size_t cap)
 {
     (void)cap;
-    return strcat(d, s);
+    if (!d || !s)
+        return d;
+    return __builtin_strcat(d, s);
 }
 
 static int safe_memcmp(const void *a, const void *b, size_t n)
@@ -234,25 +252,123 @@ static int msync_impl(void *addr, size_t len, int flags)
     return msync(addr, len, flags);
 }
 
+static int g_vprintf_count;
+
+static void emit_text(const char *text)
+{
+    if (!g_null_log_session || !text)
+        return;
+    chm_session_log(g_null_log_session, "out: %s", text);
+}
+
 static int printf_impl(const char *fmt, ...)
 {
-    (void)fmt;
-    return 0;
+    char buf[1024];
+    va_list ap;
+
+    if (g_vprintf_count > 400)
+        return 0;
+    g_vprintf_count++;
+    va_start(ap, fmt);
+    chm_format(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    emit_text(buf);
+    return (int)strlen(buf);
 }
 
 static int fprintf_impl(FILE *stream, const char *fmt, ...)
 {
-    (void)stream;
-    (void)fmt;
-    return 0;
+    char buf[1024];
+    va_list ap;
+    int n;
+
+    if (!stream || !fmt)
+        return 0;
+    va_start(ap, fmt);
+    chm_format(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    if (stream == stdout || stream == stderr) {
+        if (g_vprintf_count <= 400) {
+            g_vprintf_count++;
+            emit_text(buf);
+        }
+        return (int)strlen(buf);
+    }
+    n = (int)fwrite(buf, 1, strlen(buf), stream);
+    return n;
 }
 
 static int setvbuf_impl(FILE *stream, char *buf, int mode, size_t size)
 {
-    (void)stream;
-    (void)buf;
-    (void)size;
+    if (!stream)
+        return -1;
     return setvbuf(stream, buf, mode, size);
+}
+
+static FILE *fopen_mapped(const char *path, const char *mode)
+{
+    char mapped[1024];
+    FILE *fp;
+
+    if (!path || !mode)
+        return NULL;
+    if (mode[0] == 'r')
+        chm_foundation_map_path(path, mapped, sizeof(mapped));
+    else
+        chm_foundation_map_path_write(path, mapped, sizeof(mapped));
+    fp = fopen(mapped, mode);
+    if (!fp && g_null_log_session)
+        chm_session_log(g_null_log_session, "fopen failed %s mode %s", mapped, mode);
+    return fp;
+}
+
+static int fclose_impl(FILE *fp)
+{
+    if (!fp)
+        return -1;
+    return fclose(fp);
+}
+
+static size_t fwrite_impl(const void *p, size_t sz, size_t n, FILE *fp)
+{
+    if (!fp || !p)
+        return 0;
+    return fwrite(p, sz, n, fp);
+}
+
+static size_t fread_impl(void *p, size_t sz, size_t n, FILE *fp)
+{
+    if (!fp || !p)
+        return 0;
+    return fread(p, sz, n, fp);
+}
+
+static int fputs_impl(const char *s, FILE *fp)
+{
+    if (!fp || !s)
+        return -1;
+    return fputs(s, fp);
+}
+
+static int fputc_impl(int c, FILE *fp)
+{
+    if (!fp)
+        return -1;
+    return fputc(c, fp);
+}
+
+static int fflush_impl(FILE *fp)
+{
+    if (!fp)
+        return -1;
+    return fflush(fp);
+}
+
+static char *fgets_impl(char *s, int n, FILE *fp)
+{
+    if (!fp || !s || n <= 0)
+        return NULL;
+    return fgets(s, n, fp);
 }
 
 static int fileno_impl(FILE *stream)
@@ -279,16 +395,16 @@ static int personality_impl(void)
 
 static void stack_chk_fail_impl(void)
 {
-    abort();
+    if (g_null_log_session)
+        chm_session_log(g_null_log_session, "stack_chk_fail");
 }
 
 static void assert_rtn_impl(const char *func, const char *file, int line, const char *msg)
 {
-    (void)func;
-    (void)file;
-    (void)line;
-    (void)msg;
-    abort();
+    if (g_null_log_session) {
+        chm_session_log(g_null_log_session, "assert %s:%d %s(): %s",
+                        file ? file : "?", line, func ? func : "?", msg ? msg : "?");
+    }
 }
 
 static void dyld_stub_binder_impl(void)
@@ -385,11 +501,16 @@ static char *safe_strdup(const char *s)
     return strdup(s);
 }
 
-static chm_session *g_null_log_session;
-
 void chm_libc_set_session(chm_session *s)
 {
     g_null_log_session = s;
+}
+
+static void abort_impl(void)
+{
+    if (g_null_log_session)
+        chm_session_log(g_null_log_session, "abort() called");
+    _exit(134);
 }
 
 static int g_null_strlen_count;
@@ -402,6 +523,90 @@ static void note_null_strlen(void)
         g_null_strlen_count++;
         chm_session_log(g_null_log_session, "strlen(NULL) intercepted #%d", g_null_strlen_count);
     }
+}
+
+#if defined(__ANDROID__) && defined(CHM_OVERRIDE_CHK)
+size_t __strlen_chk(const char *s, size_t n)
+{
+    (void)n;
+    if (!s) {
+        note_null_strlen();
+        return 0;
+    }
+    return __builtin_strlen(s);
+}
+
+char *__strcpy_chk(char *d, const char *s, size_t cap)
+{
+    (void)cap;
+    if (!d)
+        return d;
+    if (!s) {
+        d[0] = 0;
+        return d;
+    }
+    return __builtin_strcpy(d, s);
+}
+
+char *__strcat_chk(char *d, const char *s, size_t cap)
+{
+    (void)cap;
+    if (!d || !s)
+        return d;
+    return __builtin_strcat(d, s);
+}
+
+void *__memcpy_chk(void *d, const void *s, size_t n, size_t cap)
+{
+    (void)cap;
+    if (!d || !s || !n)
+        return d;
+    return __builtin_memcpy(d, s, n);
+}
+
+void *__memmove_chk(void *d, const void *s, size_t n, size_t cap)
+{
+    (void)cap;
+    if (!d || !s || !n)
+        return d;
+    return __builtin_memmove(d, s, n);
+}
+
+void *__memset_chk(void *d, int c, size_t n, size_t cap)
+{
+    (void)cap;
+    if (!d || !n)
+        return d;
+    return __builtin_memset(d, c, n);
+}
+#endif
+
+static char *safe_getenv(const char *name)
+{
+    if (!name)
+        return NULL;
+    return getenv(name);
+}
+
+static int safe_setenv(const char *name, const char *value, int overwrite)
+{
+    if (!name)
+        return -1;
+    return setenv(name, value ? value : "", overwrite);
+}
+
+static int safe_access(const char *path, int mode)
+{
+    if (!path)
+        return -1;
+    return access(path, mode);
+}
+
+static int safe_stat(const char *path, struct stat *st)
+{
+    if (!path || !st)
+        return -1;
+    return stat(path, st);
 }
 
 static size_t safe_strlen(const char *s)
@@ -520,9 +725,19 @@ static const chm_entry g_entries[] = {
     FN("_realpath", realpath_impl, "libc.str"),
     FN("_printf", printf_impl, "libc.io"),
     FN("_fprintf", fprintf_impl, "libc.io"),
+    FN("_fopen", fopen_mapped, "libc.io"),
+    FN("_freopen", fopen_mapped, "libc.io"),
+    FN("_fclose", fclose_impl, "libc.io"),
+    FN("_fwrite", fwrite_impl, "libc.io"),
+    FN("_fread", fread_impl, "libc.io"),
+    FN("_fputs", fputs_impl, "libc.io"),
+    FN("_fputc", fputc_impl, "libc.io"),
+    FN("_putchar", fputc_impl, "libc.io"),
+    FN("_fflush", fflush_impl, "libc.io"),
+    FN("_fgets", fgets_impl, "libc.io"),
     FN("_setvbuf", setvbuf_impl, "libc.io"),
     FN("_fileno", fileno_impl, "libc.io"),
-    FN("_abort", abort, "libc.proc"),
+    FN("_abort", abort_impl, "libc.proc"),
     FN("_exit", exit, "libc.proc"),
     FN("___stack_chk_fail", stack_chk_fail_impl, "libc.guard"),
     FN("___memcpy_chk", memcpy_chk_impl, "libc.mem"),
@@ -535,14 +750,14 @@ static const chm_entry g_entries[] = {
     FN("_objc_personality_v0", personality_impl, "unwind"),
     FN("___objc_personality_v0", personality_impl, "unwind"),
     FN("___assert_rtn", assert_rtn_impl, "libc.guard"),
-    FN("_access", access, "libc.io"),
+    FN("_access", safe_access, "libc.io"),
     FN("_open", open_impl, "libc.io"),
     FN("_close", close, "libc.io"),
     FN("_read", read, "libc.io"),
     FN("_write", write, "libc.io"),
     FN("_lseek", lseek, "libc.io"),
     FN("_fstat", fstat, "libc.io"),
-    FN("_stat", stat, "libc.io"),
+    FN("_stat", safe_stat, "libc.io"),
     FN("_mkdir", mkdir_impl, "libc.io"),
     FN("_unlink", unlink, "libc.io"),
     FN("_opendir", opendir, "libc.io"),
@@ -553,8 +768,8 @@ static const chm_entry g_entries[] = {
     FN("_kill", kill_impl, "libc.proc"),
     FN("_sleep", sleep, "libc.proc"),
     FN("_usleep", usleep, "libc.proc"),
-    FN("_setenv", setenv, "libc.env"),
-    FN("_getenv", getenv, "libc.env"),
+    FN("_setenv", safe_setenv, "libc.env"),
+    FN("_getenv", safe_getenv, "libc.env"),
     FN("_mmap", mmap, "libc.mem"),
     FN("_mprotect", mprotect, "libc.mem"),
     FN("_munmap", munmap, "libc.mem"),

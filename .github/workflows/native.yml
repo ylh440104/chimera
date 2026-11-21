@@ -33,11 +33,17 @@ jobs:
              -o test_reject tests/test_reject.c src/macho.c src/fixups.c
           ./test_reject
 
+      - name: format regression
+        run: |
+          cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -Iinclude \
+             -o test_format tests/test_format.c src/format.c
+          ./test_format
+
       - name: session build
         run: |
           SRC="src/macho.c src/fixups.c src/session.c src/objc.c src/objc_arm64.S \
                src/libcshim.c src/dispatch.c src/foundation.c src/frameworks.c \
-               src/trap.c src/loader.c"
+               src/format.c src/trap.c src/loader.c"
           cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -Iinclude -o chmdump tools/chmdump.c $SRC -lm -ldl
           cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -Iinclude -o chmdemand tools/chmdemand.c $SRC -lm -ldl
           cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -Iinclude -o chimera_run tools/chimera_run.c $SRC -lm -ldl
@@ -54,4 +60,5 @@ jobs:
             chimera_run
             test_fixups
             test_reject
+            test_format
           if-no-files-found: error
