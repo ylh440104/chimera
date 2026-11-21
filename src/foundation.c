@@ -220,27 +220,27 @@ static const struct {
     { "NSSortDescriptor", "NSObject", 32 },
     { "UITraitCollection", "NSObject", 32 },
     { "UIResponder", "NSObject", 32 },
-    { "UIView", "UIResponder", 96 },
-    { "UIWindow", "UIView", 96 },
-    { "UIViewController", "UIResponder", 64 },
-    { "UIApplication", "UIResponder", 64 },
-    { "UIWindowScene", "NSObject", 64 },
-    { "UISceneConfiguration", "NSObject", 64 },
-    { "UIControl", "UIView", 96 },
-    { "UIButton", "UIControl", 96 },
-    { "UITextField", "UIControl", 96 },
-    { "UISwitch", "UIControl", 96 },
-    { "UISlider", "UIControl", 96 },
-    { "UILabel", "UIView", 96 },
-    { "UIImageView", "UIView", 96 },
-    { "UIScrollView", "UIView", 96 },
-    { "UITableView", "UIScrollView", 128 },
-    { "UITableViewCell", "UIView", 128 },
-    { "UINavigationBar", "UIView", 96 },
-    { "UIToolbar", "UIView", 96 },
-    { "UIProgressView", "UIView", 96 },
-    { "UIActivityIndicatorView", "UIView", 96 },
-    { "UITabBar", "UIView", 96 },
+    { "UIView", "UIResponder", 1024 },
+    { "UIWindow", "UIView", 1024 },
+    { "UIViewController", "UIResponder", 512 },
+    { "UIApplication", "UIResponder", 512 },
+    { "UIWindowScene", "NSObject", 256 },
+    { "UISceneConfiguration", "NSObject", 256 },
+    { "UIControl", "UIView", 1024 },
+    { "UIButton", "UIControl", 1024 },
+    { "UITextField", "UIControl", 1024 },
+    { "UISwitch", "UIControl", 1024 },
+    { "UISlider", "UIControl", 1024 },
+    { "UILabel", "UIView", 1024 },
+    { "UIImageView", "UIView", 1024 },
+    { "UIScrollView", "UIView", 1024 },
+    { "UITableView", "UIScrollView", 1024 },
+    { "UITableViewCell", "UIView", 1024 },
+    { "UINavigationBar", "UIView", 1024 },
+    { "UIToolbar", "UIView", 1024 },
+    { "UIProgressView", "UIView", 1024 },
+    { "UIActivityIndicatorView", "UIView", 1024 },
+    { "UITabBar", "UIView", 1024 },
     { "UITabBarItem", "NSObject", 64 },
     { "UITabBarAppearance", "NSObject", 64 },
     { "UITabBarController", "UIViewController", 96 },
@@ -381,29 +381,41 @@ static int fo_isa_is(void *obj, const char *cls_name)
     return 0;
 }
 
+#define FO_MIN_PTR 0x10000u
+
 static int fo_is_string(void *p)
 {
-    return p && ((fo_string *)p)->magic == FO_STRING_MAGIC;
+    if (!p || (uintptr_t)p < FO_MIN_PTR)
+        return 0;
+    return ((fo_string *)p)->magic == FO_STRING_MAGIC;
 }
 
 static int fo_is_data(void *p)
 {
-    return p && ((fo_data *)p)->magic == FO_DATA_MAGIC;
+    if (!p || (uintptr_t)p < FO_MIN_PTR)
+        return 0;
+    return ((fo_data *)p)->magic == FO_DATA_MAGIC;
 }
 
 static int fo_is_array(void *p)
 {
-    return p && ((fo_array *)p)->magic == FO_ARRAY_MAGIC;
+    if (!p || (uintptr_t)p < FO_MIN_PTR)
+        return 0;
+    return ((fo_array *)p)->magic == FO_ARRAY_MAGIC;
 }
 
 static int fo_is_dict(void *p)
 {
-    return p && ((fo_dict *)p)->magic == FO_DICT_MAGIC;
+    if (!p || (uintptr_t)p < FO_MIN_PTR)
+        return 0;
+    return ((fo_dict *)p)->magic == FO_DICT_MAGIC;
 }
 
 static int fo_is_handle(void *p)
 {
-    return p && ((fo_handle *)p)->magic == FO_HANDLE_MAGIC;
+    if (!p || (uintptr_t)p < FO_MIN_PTR)
+        return 0;
+    return ((fo_handle *)p)->magic == FO_HANDLE_MAGIC;
 }
 
 static void *fo_handle_new(int fd, const char *path)
@@ -420,9 +432,33 @@ static void *fo_handle_new(int fd, const char *path)
     return h;
 }
 
+static int fo_is_cfstring(void *p)
+{
+    void *cls;
+
+    if (!p || (uintptr_t)p < FO_MIN_PTR || fo_is_string(p))
+        return 0;
+    cls = *(void **)p;
+    if (!cls)
+        return 0;
+    if (cls == chm_objc_cfstr_isa())
+        return 1;
+    return chm_foundation_isa_is(p, "NSConstantString") ||
+           chm_foundation_isa_is(p, "__NSCFConstantString") ||
+           chm_foundation_isa_is(p, "NSMutableString");
+}
+
 static const char *fo_bytes(void *p)
 {
-    return fo_is_string(p) ? ((fo_string *)p)->bytes : "";
+    if (fo_is_string(p))
+        return ((fo_string *)p)->bytes;
+    if (fo_is_cfstring(p)) {
+        const char *s = *(const char *const *)((const uint8_t *)p + 16);
+
+        if (s)
+            return s;
+    }
+    return "";
 }
 
 static void *fo_string_new(const char *bytes)
@@ -681,7 +717,7 @@ static const char *o_description(void *self)
 {
     if (fo_is_string(self))
         return ((fo_string *)self)->bytes;
-    if (!self)
+    if (!self || (uintptr_t)self < FO_MIN_PTR)
         return "(null)";
     return fo_class_name(*(void **)self);
 }
@@ -1894,6 +1930,21 @@ void chm_foundation_shutdown(void)
 int chm_foundation_class_count(void)
 {
     return g_class_count;
+}
+
+int chm_foundation_isa_is(void *obj, const char *cls_name)
+{
+    return fo_isa_is(obj, cls_name);
+}
+
+void *chm_foundation_alloc_obj(const char *cls_name, size_t min)
+{
+    return fo_alloc(cls_name, min);
+}
+
+void *chm_foundation_string(const char *bytes)
+{
+    return fo_string_new(bytes);
 }
 
 void *chm_foundation_lookup_class(const char *name)

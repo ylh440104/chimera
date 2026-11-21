@@ -281,6 +281,7 @@ chm_session *chm_session_create(void)
     chm_runtime_init();
     chm_libc_set_session(s);
     chm_foundation_init(s);
+    chm_ui_init(s);
     chm_objc_session_init(s);
     return s;
 }

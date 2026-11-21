@@ -37,11 +37,13 @@ int main(int argc, char **argv)
     printf("executing main entry\n");
     fflush(stdout);
     rc = chm_session_run(s, argc - 1, argv + 1);
-    if (rc == -2) {
-        char out[16384];
+    {
+        char out[65536];
 
         chm_session_report(s, out, sizeof(out));
         printf("%s", out);
+    }
+    if (rc == -2) {
         printf("entry trapped: signal=%d fault=0x%llx pc=0x%llx lr=0x%llx image=0x%llx\n",
                chm_trap_signal(), (unsigned long long)chm_trap_fault_addr(),
                (unsigned long long)chm_trap_pc(), (unsigned long long)chm_trap_lr(),

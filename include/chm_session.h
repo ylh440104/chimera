@@ -112,6 +112,18 @@ void chm_foundation_note_missing_selector(const char *cls_name, const char *sel)
 void chm_foundation_set_root(const char *root);
 int chm_foundation_map_path(const char *in, char *out, size_t cap);
 int chm_foundation_map_path_write(const char *in, char *out, size_t cap);
+int chm_foundation_isa_is(void *obj, const char *cls_name);
+void *chm_foundation_alloc_obj(const char *cls_name, size_t min);
+void *chm_foundation_string(const char *bytes);
+
+void *chm_objc_cfstr_isa(void);
+void chm_objc_set_cfstr_isa(void *isa);
+
+void *chm_objc_send0(void *obj, const char *sel);
+void *chm_objc_send1(void *obj, const char *sel, void *a);
+void *chm_objc_send2(void *obj, const char *sel, void *a, void *b);
+void *chm_objc_send3(void *obj, const char *sel, void *a, void *b, void *c);
+void *chm_objc_new_object(const char *cls_name);
 int chm_objc_session_add_method(chm_session *s, const chm_method_reg *m);
 
 void chm_libc_set_session(chm_session *s);
@@ -125,5 +137,13 @@ uint64_t chm_trap_pc(void);
 uint64_t chm_trap_lr(void);
 int chm_trap_signal(void);
 uint64_t chm_trap_fault_addr(void);
+
+int chm_ui_main(int argc, char **argv, void *principal, void *delegate_name);
+
+void chm_ui_init(chm_session *s);
+int chm_ui_viewport(int w, int h);
+int chm_ui_running(void);
+int chm_ui_render(uint32_t *buf, int bw, int bh);
+int chm_ui_view_count(void);
 
 #endif

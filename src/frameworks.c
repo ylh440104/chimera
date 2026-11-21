@@ -505,13 +505,10 @@ static void *UIGraphicsGetImageFromCurrentImageContext_impl(void)
     return NULL;
 }
 
+
 static int UIApplicationMain_impl(int argc, char **argv, void *principal, void *delegate)
 {
-    (void)argc;
-    (void)argv;
-    (void)principal;
-    (void)delegate;
-    return 0;
+    return chm_ui_main(argc, argv, principal, delegate);
 }
 
 static void *CAFrameRateRangeMake_impl(void)

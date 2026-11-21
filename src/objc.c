@@ -456,6 +456,80 @@ void *chm_objc_msgSendSuper2_bridge(void)
     return (void *)chm_objc_msgSendSuper2_trampoline;
 }
 
+void *chm_objc_cfstr_isa(void)
+{
+    return g_cfstr_isa;
+}
+
+void chm_objc_set_cfstr_isa(void *isa)
+{
+    if (isa)
+        memcpy(g_cfstr_isa, isa, 64);
+}
+
+void *chm_objc_send0(void *obj, const char *sel)
+{
+    void *(*fn)(void *, const char *);
+
+    if (!obj || !sel)
+        return NULL;
+    fn = (void *(*)(void *, const char *))chm_objc_resolve_imp(obj, sel);
+    if (!fn)
+        return NULL;
+    return fn(obj, sel);
+}
+
+void *chm_objc_send1(void *obj, const char *sel, void *a)
+{
+    void *(*fn)(void *, const char *, void *);
+
+    if (!obj || !sel)
+        return NULL;
+    fn = (void *(*)(void *, const char *, void *))chm_objc_resolve_imp(obj, sel);
+    if (!fn)
+        return NULL;
+    return fn(obj, sel, a);
+}
+
+void *chm_objc_send2(void *obj, const char *sel, void *a, void *b)
+{
+    void *(*fn)(void *, const char *, void *, void *);
+
+    if (!obj || !sel)
+        return NULL;
+    fn = (void *(*)(void *, const char *, void *, void *))chm_objc_resolve_imp(obj, sel);
+    if (!fn)
+        return NULL;
+    return fn(obj, sel, a, b);
+}
+
+void *chm_objc_send3(void *obj, const char *sel, void *a, void *b, void *c)
+{
+    void *(*fn)(void *, const char *, void *, void *, void *);
+
+    if (!obj || !sel)
+        return NULL;
+    fn = (void *(*)(void *, const char *, void *, void *, void *))chm_objc_resolve_imp(obj, sel);
+    if (!fn)
+        return NULL;
+    return fn(obj, sel, a, b, c);
+}
+
+void *chm_objc_new_object(const char *cls_name)
+{
+    void *cls = chm_objc_session_get_class(g_active_session, cls_name);
+    void *obj;
+
+    if (!cls)
+        cls = chm_foundation_lookup_class(cls_name);
+    if (!cls)
+        return NULL;
+    obj = alloc_impl(cls);
+    if (!obj)
+        return NULL;
+    return chm_objc_send0(obj, "init");
+}
+
 void *chm_objc_session_lookup(chm_session *s, const char *name)
 {
     static const struct {

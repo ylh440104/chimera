@@ -57,7 +57,7 @@ int main(void)
     check("42", "%zu", (size_t)42);
     check("x", "%c", 'x');
     check("  x", "%3c", 'x');
-    check("[OBJ]", "[%@]", (void *)1);
+    check("[OBJ]", "[%@]", (void *)(uintptr_t)0x3000012340);
     check("[(null)]", "[%@]", (void *)NULL);
     check("a=1 b=2", "a=%d b=%d", 1, 2);
     check("100%", "%d%%", 100);

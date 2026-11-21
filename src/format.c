@@ -174,13 +174,31 @@ static void emit_double(chm_sink *s, double v, char conv, int width, int prec,
     sink_put(s, tmp, strlen(tmp));
 }
 
+static void emit_lit(chm_sink *s, const char *lit, int width, int left)
+{
+    size_t n = strlen(lit);
+    int pad = width > (int)n ? width - (int)n : 0;
+
+    if (!left)
+        sink_pad(s, ' ', pad);
+    sink_put(s, lit, n);
+    if (left)
+        sink_pad(s, ' ', pad);
+}
+
 static void emit_cstr(chm_sink *s, const char *p, int width, int prec, int left)
 {
     size_t n;
     int pad;
 
-    if (!p)
-        p = "(null)";
+    if (!p) {
+        emit_lit(s, "(null)", width, left);
+        return;
+    }
+    if ((uintptr_t)p < 0x10000u) {
+        emit_lit(s, "(bad-str)", width, left);
+        return;
+    }
     n = strlen(p);
     if (prec >= 0 && (size_t)prec < n)
         n = (size_t)prec;
@@ -318,7 +336,7 @@ void chm_format(char *dst, size_t cap, const char *fmt, va_list ap0)
             void *obj = va_arg(ap, void *);
             const char *desc = NULL;
 
-            if (g_describer && obj)
+            if (g_describer && obj && (uintptr_t)obj >= 0x10000u)
                 desc = g_describer(obj);
             if (!desc)
                 desc = obj ? "(object)" : "(null)";
