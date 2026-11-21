@@ -4,10 +4,25 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 runner=${1:?usage: run_darwin_abi.sh /path/to/chimera_run}
 tmp=$(mktemp -d)
 trap 'rm -rf -- "$tmp"' EXIT
-for name in darwin_format darwin_dispatch darwin_foundation darwin_scene; do
+for name in darwin_format darwin_dispatch darwin_foundation darwin_scene darwin_containers; do
     "${CLANG:-clang-18}" -target arm64-apple-ios15.0 -O2 -fno-objc-arc -fno-builtin -fno-stack-protector -c "$root/tests/$name.m" -o "$tmp/$name.o"
     "${LD64:-ld64.lld-18}" -arch arm64 -platform_version ios 15.0 15.0 -e _main -fixup_chains -undefined dynamic_lookup -o "$tmp/$name" "$tmp/$name.o"
     mkdir "$tmp/$name.root"
+    if [ "$name" = darwin_containers ]; then
+        for phase in first second push return; do
+            frame="$tmp/container-$phase.argb"
+            log="$tmp/container-$phase.log"
+            CHM_SANDBOX_ROOT="$tmp/$name.root" CHM_FRAME_OUT="$frame" timeout 20 "$runner" "$tmp/$name" "$phase" >"$log" 2>&1 || { rc=$?; cat "$log" >&2; exit "$rc"; }
+            grep -Fx 'entry returned 0' "$log"
+            python3 "$root/tests/check_container_pixels.py" "$frame" "$phase"
+            if [ -n "${CHM_TEST_EXPORT:-}" ]; then
+                mkdir -p "$CHM_TEST_EXPORT"
+                cp "$frame" "$log" "$CHM_TEST_EXPORT/"
+            fi
+        done
+        printf '%s: passed\n' "$name"
+        continue
+    fi
     frame=""
     if [ "$name" = darwin_scene ]; then
         cp "$root/tests/scene-info.plist" "$tmp/Info.plist"

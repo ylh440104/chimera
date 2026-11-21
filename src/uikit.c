@@ -41,7 +41,37 @@ typedef struct ui_vc {
     void *presented;
     int loading;
     int loaded;
+    void **children;
+    size_t child_count;
+    size_t selected;
+    struct ui_vc *parent;
+    struct ui_vc *active_child;
+    void *tab_item;
+    void *navigation_item;
+    void *bar;
+    int syncing;
+    int appeared;
+    int bar_hidden;
 } ui_vc;
+
+typedef struct ui_item {
+    void *object;
+    void *title;
+    void *image;
+    void *selected_image;
+    void *standard_appearance;
+    void *scroll_appearance;
+    void *right_item;
+    void *left_item;
+    uint32_t background;
+    struct ui_item *next;
+} ui_item;
+
+static ui_item *items;
+static void *wc_view(void *self, const char *sel);
+static void container_sync(ui_vc *vc);
+static void container_layout(ui_vc *vc);
+static void controller_appearance(ui_vc *vc, int appearing, int animated);
 
 static ui_view *views;
 static ui_vc *controllers;
@@ -438,7 +468,11 @@ static void *wc_view(void *self, const char *sel)
     (void)sel;
     ui_vc *vc = as_vc(self);
     if (!vc) return NULL;
-    if (vc->loading || vc->loaded) return vc->view;
+    if (vc->loading) return vc->view;
+    if (vc->loaded) {
+        container_sync(vc);
+        return vc->view;
+    }
     vc->loading = 1;
     if (!vc->view) {
         const char *load = "loadView";
@@ -452,6 +486,7 @@ static void *wc_view(void *self, const char *sel)
         if (fn) fn(self, ready);
     }
     vc->loading = 0;
+    container_sync(vc);
     return vc->view;
 }
 
@@ -474,17 +509,356 @@ static void wc_view_did_load(void *self, const char *sel)
     (void)self;
 }
 
-static void wc_set_title(void *self, const char *sel, void *t)
+static int container_kind(ui_vc *vc)
+{
+    if (!vc) return 0;
+    if (chm_objc_is_kind(vc->object, "UINavigationController")) return 1;
+    if (chm_objc_is_kind(vc->object, "UITabBarController")) return 2;
+    return 0;
+}
+
+static ui_item *item_state(void *object)
+{
+    if (!object) return NULL;
+    for (ui_item *item = items; item; item = item->next)
+        if (item->object == object) return item;
+    ui_item *item = calloc(1, sizeof(*item));
+    if (!item) return NULL;
+    item->object = object;
+    item->next = items;
+    items = item;
+    return item;
+}
+
+static void controller_appearance(ui_vc *vc, int appearing, int animated)
+{
+    if (!vc || vc->appeared == appearing) return;
+    const char *will = appearing ? "viewWillAppear:" : "viewWillDisappear:";
+    const char *did = appearing ? "viewDidAppear:" : "viewDidDisappear:";
+    void (*fn)(void *, const char *, signed char) = chm_objc_find_imp(vc->object, will);
+    if (fn) fn(vc->object, will, animated != 0);
+    vc->appeared = appearing;
+    controller_appearance(vc->active_child, appearing, animated);
+    fn = chm_objc_find_imp(vc->object, did);
+    if (fn) fn(vc->object, did, animated != 0);
+}
+
+static void *container_bar(ui_vc *vc)
+{
+    int kind = container_kind(vc);
+    if (!kind) return NULL;
+    if (!vc->bar) {
+        vc->bar = chm_foundation_alloc_obj(kind == 1 ? "UINavigationBar" : "UITabBar", 0);
+        ui_view *bar = as_view(vc->bar);
+        if (!bar) return NULL;
+        bar->bg = argb(0.11, 0.11, 0.12, 1);
+    }
+    return vc->bar;
+}
+
+static void container_layout(ui_vc *vc)
+{
+    int kind = container_kind(vc);
+    if (!kind || !vc->view) return;
+    ui_view *root = as_view(vc->view);
+    ui_view *bar = as_view(container_bar(vc));
+    if (!root || !bar) return;
+    double height = vc->bar_hidden ? 0 : (kind == 1 ? 44.0 : 49.0);
+    if (height > root->h) height = root->h > 0 ? root->h : 0;
+    bar->x = 0;
+    bar->y = kind == 1 ? 0 : root->h - height;
+    bar->w = root->w;
+    bar->h = height;
+    bar->hidden = vc->bar_hidden;
+    if (vc->active_child && vc->active_child->view) {
+        ui_view *child = as_view(vc->active_child->view);
+        if (child) {
+            child->x = 0;
+            child->y = kind == 1 ? height : 0;
+            child->w = root->w;
+            child->h = root->h - height;
+            container_layout(vc->active_child);
+        }
+    }
+    if (!view_add(root, bar)) chm_session_log(g_sess, "ui: could not mount container bar");
+}
+
+static void container_sync(ui_vc *vc)
+{
+    int kind = container_kind(vc);
+    if (!kind || !vc->view || vc->loading || vc->syncing) return;
+    vc->syncing = 1;
+    size_t index = kind == 1 && vc->child_count ? vc->child_count - 1 : vc->selected;
+    ui_vc *next = index < vc->child_count ? as_vc(vc->children[index]) : NULL;
+    if (next != vc->active_child) {
+        if (vc->active_child) {
+            if (vc->appeared) controller_appearance(vc->active_child, 0, 0);
+            view_remove(as_view(vc->active_child->view));
+        }
+        vc->active_child = NULL;
+        if (next) {
+            void *child = chm_objc_send0(next->object, "view");
+            if (view_add(as_view(vc->view), as_view(child))) {
+                vc->active_child = next;
+                container_layout(vc);
+                if (vc->appeared) controller_appearance(next, 1, 0);
+                chm_session_log(g_sess, "ui: container=%s selected=%zu child=%s",
+                                chm_objc_class_name(*(void **)vc->object), index,
+                                chm_objc_class_name(*(void **)next->object));
+            } else chm_session_log(g_sess, "ui: container child has no mountable view");
+        }
+    }
+    container_layout(vc);
+    vc->syncing = 0;
+}
+
+static int container_set(ui_vc *vc, void *const *objects, size_t count)
+{
+    if (!container_kind(vc) || (count && !objects) || count > SIZE_MAX / sizeof(void *)) return 0;
+    for (size_t i = 0; i < count; i++) {
+        ui_vc *child = as_vc(objects[i]);
+        if (!child || (child->parent && child->parent != vc)) return 0;
+        for (ui_vc *parent = vc; parent; parent = parent->parent)
+            if (parent == child) return 0;
+        for (size_t j = 0; j < i; j++) if (objects[i] == objects[j]) return 0;
+    }
+    void **copy = count ? malloc(count * sizeof(*copy)) : NULL;
+    if (count && !copy) return 0;
+    if (count) memcpy(copy, objects, count * sizeof(*copy));
+    void *selected = vc->selected < vc->child_count ? vc->children[vc->selected] : NULL;
+    for (size_t i = 0; i < vc->child_count; i++) {
+        ui_vc *child = as_vc(vc->children[i]);
+        if (child && child->parent == vc) child->parent = NULL;
+    }
+    free(vc->children);
+    vc->children = copy;
+    vc->child_count = count;
+    vc->selected = 0;
+    for (size_t i = 0; i < count; i++) {
+        as_vc(copy[i])->parent = vc;
+        if (copy[i] == selected) vc->selected = i;
+    }
+    container_sync(vc);
+    return 1;
+}
+
+static void *nav_init_root(void *self, const char *sel, void *root)
 {
     (void)sel;
-    if (as_vc(self))
-        as_vc(self)->title = t;
+    ui_vc *vc = as_vc(self);
+    return container_kind(vc) == 1 && container_set(vc, &root, 1) ? self : NULL;
+}
+
+static void container_set_array(void *self, const char *sel, void *array)
+{
+    (void)sel;
+    ui_vc *vc = as_vc(self);
+    if (!container_kind(vc) || (array && !chm_objc_is_kind(array, "NSArray"))) return;
+    size_t (*get_count)(void *, const char *) = chm_objc_find_imp(array, "count");
+    size_t count = get_count ? get_count(array, "count") : 0;
+    if (count > SIZE_MAX / sizeof(void *)) return;
+    void **objects = count ? malloc(count * sizeof(*objects)) : NULL;
+    if (count && !objects) return;
+    void *(*get)(void *, const char *, size_t) = chm_objc_find_imp(array, "objectAtIndex:");
+    for (size_t i = 0; i < count; i++) objects[i] = get ? get(array, "objectAtIndex:", i) : NULL;
+    if (!container_set(vc, objects, count)) chm_session_log(g_sess, "ui: invalid container children");
+    free(objects);
+}
+
+static void *container_children(void *self, const char *sel)
+{
+    (void)sel;
+    ui_vc *vc = as_vc(self);
+    if (!vc) return NULL;
+    void *array = chm_foundation_alloc_obj("NSMutableArray", 0);
+    for (size_t i = 0; array && i < vc->child_count; i++) chm_objc_send1(array, "addObject:", vc->children[i]);
+    return array;
+}
+
+static size_t tab_index(void *self, const char *sel)
+{
+    (void)sel;
+    ui_vc *vc = as_vc(self);
+    return vc ? vc->selected : 0;
+}
+
+static void tab_select(void *self, const char *sel, size_t index)
+{
+    (void)sel;
+    ui_vc *vc = as_vc(self);
+    if (container_kind(vc) != 2 || index >= vc->child_count) return;
+    vc->selected = index;
+    container_sync(vc);
+}
+
+static void *container_selected(void *self, const char *sel)
+{
+    (void)sel;
+    ui_vc *vc = as_vc(self);
+    if (!vc || !vc->child_count) return NULL;
+    size_t index = container_kind(vc) == 1 ? vc->child_count - 1 : vc->selected;
+    return index < vc->child_count ? vc->children[index] : NULL;
+}
+
+static void tab_select_object(void *self, const char *sel, void *object)
+{
+    ui_vc *vc = as_vc(self);
+    for (size_t i = 0; vc && i < vc->child_count; i++)
+        if (vc->children[i] == object) { tab_select(self, sel, i); return; }
+}
+
+static void nav_push(void *self, const char *sel, void *object, signed char animated)
+{
+    (void)sel;
+    (void)animated;
+    ui_vc *vc = as_vc(self);
+    if (container_kind(vc) != 1 || vc->child_count >= SIZE_MAX / sizeof(void *) - 1) return;
+    void **objects = malloc((vc->child_count + 1) * sizeof(*objects));
+    if (!objects) return;
+    if (vc->child_count) memcpy(objects, vc->children, vc->child_count * sizeof(*objects));
+    objects[vc->child_count] = object;
+    if (!container_set(vc, objects, vc->child_count + 1)) chm_session_log(g_sess, "ui: invalid navigation push");
+    free(objects);
+}
+
+static void *nav_pop(void *self, const char *sel, signed char animated)
+{
+    (void)sel;
+    (void)animated;
+    ui_vc *vc = as_vc(self);
+    if (container_kind(vc) != 1 || vc->child_count <= 1) return NULL;
+    void *last = vc->children[vc->child_count - 1];
+    return container_set(vc, vc->children, vc->child_count - 1) ? last : NULL;
+}
+
+static void *controller_parent(void *self, const char *sel)
+{
+    ui_vc *vc = as_vc(self);
+    ui_vc *parent = vc ? vc->parent : NULL;
+    while (parent) {
+        if (!strcmp(sel, "parentViewController") ||
+            (!strcmp(sel, "navigationController") && container_kind(parent) == 1) ||
+            (!strcmp(sel, "tabBarController") && container_kind(parent) == 2)) return parent->object;
+        parent = parent->parent;
+    }
+    return NULL;
+}
+
+static void *controller_bar(void *self, const char *sel)
+{
+    (void)sel;
+    ui_vc *vc = as_vc(self);
+    void *bar = container_bar(vc);
+    if (bar && vc->view) container_layout(vc);
+    return bar;
+}
+
+static void nav_hide_bar(void *self, const char *sel, signed char hidden, signed char animated)
+{
+    (void)sel; (void)animated;
+    ui_vc *vc = as_vc(self);
+    if (container_kind(vc) != 1) return;
+    vc->bar_hidden = hidden != 0;
+    container_layout(vc);
+}
+
+static int is_bar_item(void *obj)
+{
+    return chm_objc_is_kind(obj, "UITabBarItem") || chm_objc_is_kind(obj, "UINavigationItem") ||
+           chm_objc_is_kind(obj, "UIBarButtonItem");
+}
+
+static void wc_set_title(void *self, const char *sel, void *title)
+{
+    (void)sel;
+    ui_vc *vc = as_vc(self);
+    if (vc) vc->title = title;
+    else if (is_bar_item(self)) {
+        ui_item *item = item_state(self);
+        if (item) item->title = title;
+    }
 }
 
 static void *wc_title(void *self, const char *sel)
 {
     (void)sel;
-    return as_vc(self) ? as_vc(self)->title : NULL;
+    ui_vc *vc = as_vc(self);
+    if (vc) return vc->title;
+    ui_item *item = is_bar_item(self) ? item_state(self) : NULL;
+    return item ? item->title : NULL;
+}
+
+static void *tab_item_init(void *self, const char *sel, void *title, void *image, void *selected)
+{
+    (void)sel;
+    if (!chm_objc_is_kind(self, "UITabBarItem")) return NULL;
+    ui_item *item = item_state(self);
+    if (!item) return NULL;
+    item->title = title;
+    item->image = image;
+    item->selected_image = selected;
+    return self;
+}
+
+static void *controller_item(void *self, const char *sel)
+{
+    ui_vc *vc = as_vc(self);
+    if (!vc) return NULL;
+    int navigation = !strcmp(sel, "navigationItem");
+    void **slot = navigation ? &vc->navigation_item : &vc->tab_item;
+    if (!*slot) {
+        *slot = chm_foundation_alloc_obj(navigation ? "UINavigationItem" : "UITabBarItem", 0);
+        ui_item *item = item_state(*slot);
+        if (item) item->title = vc->title;
+    }
+    return *slot;
+}
+
+static void controller_set_item(void *self, const char *sel, void *item)
+{
+    (void)sel;
+    ui_vc *vc = as_vc(self);
+    if (vc && (!item || chm_objc_is_kind(item, "UITabBarItem"))) vc->tab_item = item;
+}
+
+static void *item_image(void *self, const char *sel)
+{
+    ui_item *item = is_bar_item(self) ? item_state(self) : NULL;
+    if (!item) return NULL;
+    return !strcmp(sel, "selectedImage") ? item->selected_image : item->image;
+}
+
+static void bar_set_appearance(void *self, const char *sel, void *appearance)
+{
+    ui_view *bar = as_view(self);
+    if (!bar || (!chm_objc_is_kind(self, "UITabBar") && !chm_objc_is_kind(self, "UINavigationBar"))) return;
+    ui_item *state = item_state(self);
+    if (!state) return;
+    if (!strcmp(sel, "setStandardAppearance:")) state->standard_appearance = appearance;
+    else state->scroll_appearance = appearance;
+    ui_item *style = appearance ? item_state(appearance) : NULL;
+    if (style) bar->bg = style->background;
+}
+
+static void *bar_appearance(void *self, const char *sel)
+{
+    ui_item *state = item_state(self);
+    if (!state) return NULL;
+    return !strcmp(sel, "standardAppearance") ? state->standard_appearance : state->scroll_appearance;
+}
+
+static void appearance_default(void *self, const char *sel)
+{
+    (void)sel;
+    if (!chm_objc_is_kind(self, "UITabBarAppearance")) return;
+    ui_item *state = item_state(self);
+    if (state) state->background = argb(0.11, 0.11, 0.12, 1);
+}
+
+static void container_set_array_animated(void *self, const char *sel, void *array, signed char animated)
+{
+    (void)animated;
+    container_set_array(self, sel, array);
 }
 
 static void wc_present(void *self, const char *sel, void *other, int animated, void *done)
@@ -531,8 +905,15 @@ static void win_make_key(void *self, const char *sel)
     (void)sel;
     if (!v || !chm_objc_is_kind(self, "UIWindow"))
         return;
+    if (g_key_window && g_key_window != v && g_key_window->owner)
+        controller_appearance(as_vc(g_key_window->owner), 0, 0);
     v->hidden = 0;
     g_key_window = v;
+    if (v->owner) {
+        ui_vc *vc = as_vc(v->owner);
+        container_layout(vc);
+        controller_appearance(vc, 1, 0);
+    }
 }
 
 static int win_is_key(void *self, const char *sel)
@@ -550,7 +931,10 @@ static void win_set_root_vc(void *self, const char *sel, void *vc)
     if (vc && !child) return;
     if (v->owner) {
         ui_vc *previous = as_vc(v->owner);
-        if (previous) view_remove(as_view(previous->view));
+        if (previous) {
+            if (v == g_key_window) controller_appearance(previous, 0, 0);
+            view_remove(as_view(previous->view));
+        }
     }
     v->owner = NULL;
     if (!child) return;
@@ -558,7 +942,11 @@ static void win_set_root_vc(void *self, const char *sel, void *vc)
     child->y = 0;
     child->w = v->w;
     child->h = v->h;
-    if (view_add(v, child)) v->owner = vc;
+    if (view_add(v, child)) {
+        v->owner = vc;
+        container_layout(as_vc(vc));
+        if (v == g_key_window) controller_appearance(as_vc(vc), 1, 0);
+    }
 }
 
 static void *win_root_vc(void *self, const char *sel)
@@ -886,6 +1274,36 @@ static const struct {
     const char *sel;
     void *imp;
 } g_ui_methods[] = {
+    { "initWithRootViewController:", (void *)nav_init_root },
+    { "viewControllers", (void *)container_children },
+    { "childViewControllers", (void *)container_children },
+    { "setViewControllers:", (void *)container_set_array },
+    { "setViewControllers:animated:", (void *)container_set_array_animated },
+    { "selectedIndex", (void *)tab_index },
+    { "setSelectedIndex:", (void *)tab_select },
+    { "selectedViewController", (void *)container_selected },
+    { "setSelectedViewController:", (void *)tab_select_object },
+    { "topViewController", (void *)container_selected },
+    { "visibleViewController", (void *)container_selected },
+    { "pushViewController:animated:", (void *)nav_push },
+    { "popViewControllerAnimated:", (void *)nav_pop },
+    { "parentViewController", (void *)controller_parent },
+    { "navigationController", (void *)controller_parent },
+    { "tabBarController", (void *)controller_parent },
+    { "tabBar", (void *)controller_bar },
+    { "navigationBar", (void *)controller_bar },
+    { "setNavigationBarHidden:animated:", (void *)nav_hide_bar },
+    { "tabBarItem", (void *)controller_item },
+    { "navigationItem", (void *)controller_item },
+    { "setTabBarItem:", (void *)controller_set_item },
+    { "initWithTitle:image:selectedImage:", (void *)tab_item_init },
+    { "image", (void *)item_image },
+    { "selectedImage", (void *)item_image },
+    { "setStandardAppearance:", (void *)bar_set_appearance },
+    { "setScrollEdgeAppearance:", (void *)bar_set_appearance },
+    { "standardAppearance", (void *)bar_appearance },
+    { "scrollEdgeAppearance", (void *)bar_appearance },
+    { "configureWithDefaultBackground", (void *)appearance_default },
     { "initWithWindowScene:", (void *)win_init_scene },
     { "windowScene", (void *)win_scene },
     { "loadView", (void *)wc_load_view },
@@ -963,8 +1381,14 @@ void chm_ui_shutdown(chm_session *s)
     }
     while (controllers) {
         ui_vc *next = controllers->next;
+        free(controllers->children);
         free(controllers);
         controllers = next;
+    }
+    while (items) {
+        ui_item *next = items->next;
+        free(items);
+        items = next;
     }
     chm_scene_reset();
     g_sess = NULL;
