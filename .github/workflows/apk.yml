@@ -9,6 +9,9 @@ on:
       - ".github/workflows/apk.yml"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -39,13 +42,56 @@ jobs:
         with:
           gradle-version: "8.9"
 
-      - name: assemble
+      - name: restore signing key
+        env:
+          CHIMERA_SIGNING_STORE: ${{ secrets.CHIMERA_SIGNING_STORE }}
         run: |
+          test -n "$CHIMERA_SIGNING_STORE"
+          umask 077
+          printf '%s' "$CHIMERA_SIGNING_STORE" | base64 --decode > "$RUNNER_TEMP/chimera.p12"
+          test -s "$RUNNER_TEMP/chimera.p12"
+
+      - name: assemble
+        env:
+          CHIMERA_KEYSTORE_PATH: ${{ runner.temp }}/chimera.p12
+          CHIMERA_KEYSTORE_PASSWORD: ${{ secrets.CHIMERA_SIGNING_PASSWORD }}
+        run: |
+          test -n "$CHIMERA_KEYSTORE_PASSWORD"
           cd android
           gradle assembleDebug --no-daemon
+
+      - name: verify fixed certificate
+        env:
+          EXPECTED_CERTIFICATE: ${{ secrets.CHIMERA_SIGNING_SHA256 }}
+        run: |
+          test -n "$EXPECTED_CERTIFICATE"
+          mkdir -p dist
+          apk="dist/Chimera-${GITHUB_SHA:0:7}.apk"
+          cp android/app/build/outputs/apk/debug/app-debug.apk "$apk"
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --print-certs "$apk" > dist/certificate.txt
+          actual=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' dist/certificate.txt)
+          test "$actual" = "$EXPECTED_CERTIFICATE"
+          printf '%s\n' "$GITHUB_SHA" > dist/commit.txt
+          cd dist
+          sha256sum *.apk > SHA256SUMS
+
+      - name: remove temporary signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/chimera.p12"
 
       - uses: actions/upload-artifact@v4
         with:
           name: chimera-debug-apk
-          path: android/app/build/outputs/apk/debug/*.apk
+          path: dist/
           if-no-files-found: error
+
+      - name: publish build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="apk-${GITHUB_RUN_ID}"
+          printf '固定签名构建，提交 %s。\n' "$GITHUB_SHA" > "$RUNNER_TEMP/release-notes.md"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --target "$GITHUB_SHA" --title "Chimera ${GITHUB_SHA:0:7}" --notes-file "$RUNNER_TEMP/release-notes.md" --prerelease
+          fi
+          gh release upload "$tag" dist/* --clobber

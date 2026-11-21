@@ -12,7 +12,7 @@ android {
         applicationId = "dev.chimera.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
+        versionCode = providers.environmentVariable("GITHUB_RUN_NUMBER").orNull?.toInt() ?: 1
         versionName = "0.1"
         ndk {
             abiFilters += "arm64-v8a"
@@ -41,9 +41,23 @@ android {
         jvmTarget = "17"
     }
 
+    signingConfigs {
+        create("chimera") {
+            storeFile = file(providers.environmentVariable("CHIMERA_KEYSTORE_PATH").get())
+            storePassword = providers.environmentVariable("CHIMERA_KEYSTORE_PASSWORD").get()
+            keyAlias = "chimera"
+            keyPassword = providers.environmentVariable("CHIMERA_KEYSTORE_PASSWORD").get()
+            storeType = "PKCS12"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("chimera")
+        }
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("chimera")
         }
     }
 }

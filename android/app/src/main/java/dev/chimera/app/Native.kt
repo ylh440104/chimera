@@ -7,7 +7,7 @@ class Native {
         }
 
         @JvmStatic
-        external fun load(path: String): String
+        external fun load(path: String, sandbox: String): String
 
         @JvmStatic
         external fun run(): String

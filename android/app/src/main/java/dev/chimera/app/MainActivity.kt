@@ -133,7 +133,9 @@ class MainActivity : AppCompatActivity() {
                 }
                 log("bundle " + app.name + " exe " + exeName)
 
-                val report = Native.load(exe.absolutePath)
+                val sandbox = File(filesDir, "sandbox")
+                check(sandbox.isDirectory || sandbox.mkdirs()) { "无法创建应用数据目录" }
+                val report = Native.load(exe.absolutePath, sandbox.absolutePath)
                 report.split("\n").forEach { if (it.isNotEmpty()) log(it) }
                 Native.report().split("\n").forEach { if (it.isNotEmpty() && !report.contains(it)) log(it) }
                 runOnUiThread { runButton.isEnabled = true }
