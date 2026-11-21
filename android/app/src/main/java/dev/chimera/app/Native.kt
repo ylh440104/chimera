@@ -2,6 +2,7 @@ package dev.chimera.app
 
 class Native {
     companion object {
+        val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
         init {
             System.loadLibrary("chimera")
         }
@@ -17,6 +18,12 @@ class Native {
 
         @JvmStatic
         external fun pump(): Int
+
+        @JvmStatic
+        external fun ready(): Boolean
+
+        @JvmStatic
+        external fun render(width: Int, height: Int): IntArray?
 
         @JvmStatic
         external fun release()

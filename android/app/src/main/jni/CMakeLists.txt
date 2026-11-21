@@ -17,9 +17,12 @@ add_library(chimera SHARED
         ${ROOT}/src/frameworks.c
         ${ROOT}/src/format.c
         ${ROOT}/src/uikit.c
+        ${ROOT}/src/scene.c
+        ${ROOT}/src/scene_manifest.c
+        ${ROOT}/third_party/yxml/yxml.c
         ${ROOT}/src/trap.c
         ${ROOT}/src/loader.c)
 
-target_include_directories(chimera PRIVATE ${ROOT}/include)
+target_include_directories(chimera PRIVATE ${ROOT}/include ${ROOT}/third_party/yxml)
 
 target_link_libraries(chimera log m dl)

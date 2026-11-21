@@ -244,7 +244,10 @@ static const struct {
     { "UIWindow", "UIView", 1024 },
     { "UIViewController", "UIResponder", 512 },
     { "UIApplication", "UIResponder", 512 },
-    { "UIWindowScene", "NSObject", 256 },
+    { "UIScene", "UIResponder", 256 },
+    { "UIWindowScene", "UIScene", 256 },
+    { "UISceneSession", "NSObject", 256 },
+    { "UISceneConnectionOptions", "NSObject", 256 },
     { "UISceneConfiguration", "NSObject", 256 },
     { "UIControl", "UIView", 1024 },
     { "UIButton", "UIControl", 1024 },
@@ -764,18 +767,11 @@ static int o_no(void *self)
 
 static int o_is_kind(void *self, const char *sel, void *cls)
 {
-    fo_class *c;
-
-    (void)sel;
     if (!self || !cls)
         return 0;
-    c = fo_owning(*(void **)self);
-    while (c) {
-        if ((void *)&c->cls == cls)
-            return 1;
-        c = c->parent;
-    }
-    return 0;
+    if (!strcmp(sel, "isMemberOfClass:"))
+        return *(void **)self == cls;
+    return chm_objc_is_kind(self, chm_objc_class_name(cls));
 }
 
 static int o_is_string_class(void *self, const char *sel)
@@ -844,9 +840,8 @@ static int o_compare(void *self, const char *sel, void *other)
 
 static int o_responds(void *self, const char *cmd, const char *sel)
 {
-    (void)self;
     (void)cmd;
-    return chm_foundation_lookup_method(NULL, sel) != NULL;
+    return chm_objc_find_imp(self, sel) != NULL;
 }
 
 static int64_t o_length(void *self)
@@ -1343,6 +1338,48 @@ static void d_set_subscript(void *self, const char *sel, void *obj, void *key)
 {
     if (obj) d_set(self, sel, obj, key);
     else d_remove(self, sel, key);
+}
+
+static void *d_key_path_parent(void *self, const char *path, char **leaf)
+{
+    char *copy = strdup(path);
+    if (!copy) return NULL;
+    void *current = self;
+    char *part = copy;
+    char *dot;
+    while ((dot = strchr(part, '.')) != NULL) {
+        *dot = 0;
+        if (!*part || !fo_is_dict(current)) { free(copy); return NULL; }
+        void *key = fo_string_new(part);
+        current = d_value(current, NULL, key);
+        part = dot + 1;
+    }
+    if (!*part || !fo_is_dict(current)) { free(copy); return NULL; }
+    *leaf = strdup(part);
+    free(copy);
+    return *leaf ? current : NULL;
+}
+
+static void *d_value_path(void *self, const char *sel, void *path)
+{
+    (void)sel;
+    char *leaf = NULL;
+    void *parent = d_key_path_parent(self, fo_bytes(path), &leaf);
+    if (!parent) return NULL;
+    void *key = fo_string_new(leaf);
+    free(leaf);
+    return d_value(parent, NULL, key);
+}
+
+static void d_set_value_path(void *self, const char *sel, void *value, void *path)
+{
+    (void)sel;
+    char *leaf = NULL;
+    void *parent = d_key_path_parent(self, fo_bytes(path), &leaf);
+    if (!parent) return;
+    void *key = fo_string_new(leaf);
+    free(leaf);
+    d_set_subscript(parent, NULL, value, key);
 }
 
 static void *d_keys(void *self)
@@ -2213,6 +2250,10 @@ static const struct {
     { "lastObject", (void *)a_last },
     { "addObject:", (void *)a_add },
     { "componentsJoinedByString:", (void *)a_joined },
+    { "valueForKey:", (void *)d_value },
+    { "valueForKeyPath:", (void *)d_value_path },
+    { "setValue:forKey:", (void *)d_set_subscript },
+    { "setValue:forKeyPath:", (void *)d_set_value_path },
     { "objectForKey:", (void *)d_value },
     { "objectForKeyedSubscript:", (void *)d_value },
     { "setObject:forKey:", (void *)d_set },

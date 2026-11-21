@@ -1,4 +1,5 @@
 #include "chm_session.h"
+#include "chm_scene.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -338,7 +339,7 @@ static void *objc_initWeak_impl(void *slot, void *obj)
 {
     if (slot)
         *(void **)slot = obj;
-    return slot;
+    return obj;
 }
 
 static void *objc_loadWeakRetained_impl(void *slot)
@@ -352,10 +353,11 @@ static void objc_destroyWeak_impl(void *slot)
         *(void **)slot = NULL;
 }
 
-static void objc_storeWeak_impl(void *slot, void *obj)
+static void *objc_storeWeak_impl(void *slot, void *obj)
 {
     if (slot)
         *(void **)slot = obj;
+    return obj;
 }
 
 static void objc_enumerationMutation_impl(void *obj)
@@ -634,7 +636,7 @@ static const fw_entry g_data[] = {
     { "_NSProgressFileOperationKindDownloading", &g_nskey[7] },
     { "_UIFontTextStyleBody", &g_nskey[8] },
     { "_UIFontTextStyleFootnote", &g_nskey[9] },
-    { "_UIWindowSceneSessionRoleApplication", &g_nskey[10] },
+    { "_UIWindowSceneSessionRoleApplication", &chm_scene_application_role },
     { "_GCControllerDidConnectNotification", &g_gcnote[0] },
     { "_GCControllerDidDisconnectNotification", &g_gcnote[1] },
     { "_GCMouseDidConnectNotification", &g_gcnote[2] },

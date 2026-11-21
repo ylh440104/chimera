@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleIdentifier</key><string>dev.chimera.fixture</string>
+  <key>CFBundleExecutable</key><string>darwin_scene</string>
+  <key>CFBundleShortVersionString</key><string>2.7</string>
+  <key>CFBundleVersion</key><string>13</string>
+  <key>UIApplicationSceneManifest</key><dict>
+    <key>UIApplicationSupportsMultipleScenes</key><false/>
+    <key>UISceneConfigurations</key><dict>
+      <key>UIWindowSceneSessionRoleExternalDisplay</key><array><dict>
+        <key>UISceneConfigurationName</key><string>Main &amp; Window</string>
+        <key>UISceneDelegateClassName</key><string>ExternalDisplayDelegate</string>
+      </dict></array>
+      <key>UIWindowSceneSessionRoleApplication</key><array>
+        <dict><key>UISceneConfigurationName</key><string>Secondary</string>
+          <key>UISceneDelegateClassName</key><string>UnusedDelegate</string></dict>
+        <dict><key>UISceneDelegateClassName</key><string>FixtureWindowDelegate</string>
+          <key>UISceneConfigurationName</key><string>Main &amp; Window</string></dict>
+      </array>
+    </dict>
+  </dict>
+</dict></plist>

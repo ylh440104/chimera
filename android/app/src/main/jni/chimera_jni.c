@@ -2,6 +2,7 @@
 #include <android/log.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "chm_session.h"
@@ -105,6 +106,32 @@ JNIEXPORT jint JNICALL Java_dev_chimera_app_Native_pump(JNIEnv *env, jclass cls)
     (void)env;
     (void)cls;
     return (jint)chm_dispatch_pump(g_session);
+}
+
+JNIEXPORT jboolean JNICALL Java_dev_chimera_app_Native_ready(JNIEnv *env, jclass cls)
+{
+    (void)env;
+    (void)cls;
+    return g_session && g_session->prepared && g_session->images[0].executable;
+}
+
+JNIEXPORT jintArray JNICALL Java_dev_chimera_app_Native_render(JNIEnv *env, jclass cls, jint width, jint height)
+{
+    (void)cls;
+    if (!g_session || !chm_ui_running() || g_session->exit_code != 0 ||
+        width <= 0 || height <= 0 || width > 2048 || height > 2048)
+        return NULL;
+    size_t count = (size_t)width * (size_t)height;
+    uint32_t *pixels = calloc(count, sizeof(*pixels));
+    if (!pixels) return NULL;
+    if (chm_ui_render(pixels, width, height) != 1) {
+        free(pixels);
+        return NULL;
+    }
+    jintArray out = (*env)->NewIntArray(env, (jsize)count);
+    if (out) (*env)->SetIntArrayRegion(env, out, 0, (jsize)count, (const jint *)pixels);
+    free(pixels);
+    return out;
 }
 
 JNIEXPORT void JNICALL Java_dev_chimera_app_Native_release(JNIEnv *env, jclass cls)

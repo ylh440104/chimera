@@ -1,4 +1,5 @@
 #include "chm_session.h"
+#include "chm_scene.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -192,7 +193,7 @@ static void *lookup_registered(chm_session *s, const char *sel)
     return NULL;
 }
 
-void *chm_objc_resolve_imp(void *self, const char *sel)
+static void *resolve_imp(void *self, const char *sel, int report)
 {
     chm_objc_class *c;
     int depth = 0;
@@ -223,14 +224,38 @@ void *chm_objc_resolve_imp(void *self, const char *sel)
         fallback = (void *)new_method;
     else if (!strcmp(sel, "class"))
         fallback = (void *)class_method;
-    else
-        fallback = lookup_registered(g_active_session, sel);
+    else {
+        fallback = chm_scene_method(self, sel);
+        if (!fallback)
+            fallback = lookup_registered(g_active_session, sel);
+    }
     if (!fallback)
         fallback = chm_foundation_lookup_method(NULL, sel);
     trace_msg(origin, sel, fallback);
-    if (!fallback && g_active_session)
+    if (!fallback && report && g_active_session)
         chm_session_log(g_active_session, "selector miss: -[%s %s]", origin, sel);
     return fallback;
+}
+
+void *chm_objc_resolve_imp(void *self, const char *sel)
+{
+    return resolve_imp(self, sel, 1);
+}
+
+void *chm_objc_find_imp(void *self, const char *sel)
+{
+    return resolve_imp(self, sel, 0);
+}
+
+int chm_objc_is_kind(void *obj, const char *name)
+{
+    if (!obj || !name) return 0;
+    chm_objc_class *cls = *(chm_objc_class **)obj;
+    for (int depth = 0; cls && depth < 64; depth++, cls = cls->superclass) {
+        const char *current = class_name(cls);
+        if (current && !strcmp(current, name)) return 1;
+    }
+    return 0;
 }
 
 void *chm_objc_resolve_super2_imp(void *super_ptr, const char *sel)
@@ -252,7 +277,8 @@ void *chm_objc_resolve_super2_imp(void *super_ptr, const char *sel)
         c = (chm_objc_class *)c->superclass;
         depth++;
     }
-    return chm_foundation_lookup_method(NULL, sel);
+    void *fallback = lookup_registered(g_active_session, sel);
+    return fallback ? fallback : chm_foundation_lookup_method(NULL, sel);
 }
 
 void chm_objc_session_init(chm_session *s)

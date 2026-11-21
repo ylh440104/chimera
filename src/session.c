@@ -292,6 +292,7 @@ void chm_session_destroy(chm_session *s)
 
     if (!s)
         return;
+    chm_ui_shutdown(s);
     for (i = 0; i < s->image_count; i++)
         chm_close(&s->images[i]);
     if (s->sels) {

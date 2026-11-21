@@ -1,14 +1,19 @@
-#include "chm_session.h"
+#include "chm_scene.h"
 
 #include <stdio.h>
+#include <limits.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define UI_VIEW_MAX_KIDS 96
 #define UI_TEXT_MAX 160
 
+typedef struct { double x, y, w, h; } ui_rect;
+
 typedef struct ui_view {
-    void *isa;
+    void *object;
+    struct ui_view *next;
+    void *scene;
     double x;
     double y;
     double w;
@@ -29,11 +34,17 @@ typedef struct ui_view {
 } ui_view;
 
 typedef struct ui_vc {
-    void *isa;
+    void *object;
+    struct ui_vc *next;
     void *view;
     void *title;
     void *presented;
+    int loading;
+    int loaded;
 } ui_vc;
+
+static ui_view *views;
+static ui_vc *controllers;
 
 typedef struct ui_app {
     void *isa;
@@ -77,16 +88,29 @@ static uint32_t argb(double r, double g, double b, double a)
 
 static ui_view *as_view(void *p)
 {
-    if (!p || !chm_foundation_isa_is(p, "UIView"))
-        return NULL;
-    return (ui_view *)p;
+    if (!p || !chm_objc_is_kind(p, "UIView")) return NULL;
+    for (ui_view *v = views; v; v = v->next)
+        if (v->object == p) return v;
+    ui_view *v = calloc(1, sizeof(*v));
+    if (!v) return NULL;
+    v->object = p;
+    v->alpha = 1.0;
+    v->next = views;
+    views = v;
+    return v;
 }
 
 static ui_vc *as_vc(void *p)
 {
-    if (!p || !chm_foundation_isa_is(p, "UIViewController"))
-        return NULL;
-    return (ui_vc *)p;
+    if (!p || !chm_objc_is_kind(p, "UIViewController")) return NULL;
+    for (ui_vc *v = controllers; v; v = v->next)
+        if (v->object == p) return v;
+    ui_vc *v = calloc(1, sizeof(*v));
+    if (!v) return NULL;
+    v->object = p;
+    v->next = controllers;
+    controllers = v;
+    return v;
 }
 
 static ui_color *as_color(void *p)
@@ -103,25 +127,27 @@ static void view_init(ui_view *v, double x, double y, double w, double h)
     v->w = w;
     v->h = h;
     v->alpha = 1.0;
-    v->kid_cap = 8;
-    v->kids = calloc((size_t)v->kid_cap, sizeof(ui_view *));
 }
 
-static void view_add(ui_view *p, ui_view *c)
-{
-    if (!p || !c || p->nkids >= UI_VIEW_MAX_KIDS)
-        return;
-    if (p->nkids >= p->kid_cap) {
-        int cap = p->kid_cap * 2 > UI_VIEW_MAX_KIDS ? UI_VIEW_MAX_KIDS : p->kid_cap * 2;
-        ui_view **nk = realloc(p->kids, (size_t)cap * sizeof(ui_view *));
+static void view_remove(ui_view *c);
 
-        if (!nk)
-            return;
-        p->kids = nk;
+static int view_add(ui_view *p, ui_view *c)
+{
+    if (!p || !c) return 0;
+    for (ui_view *v = p; v; v = v->parent)
+        if (v == c) return 0;
+    if (c->parent != p && p->nkids == p->kid_cap) {
+        if (p->kid_cap > INT_MAX / 2) return 0;
+        int cap = p->kid_cap ? p->kid_cap * 2 : 8;
+        ui_view **kids = realloc(p->kids, (size_t)cap * sizeof(*kids));
+        if (!kids) return 0;
+        p->kids = kids;
         p->kid_cap = cap;
     }
+    view_remove(c);
     c->parent = p;
     p->kids[p->nkids++] = c;
+    return 1;
 }
 
 static void view_remove(ui_view *c)
@@ -142,17 +168,9 @@ static void view_remove(ui_view *c)
     c->parent = NULL;
 }
 
-static void *n_rect(double x, double y, double w, double h)
+static ui_rect n_rect(double x, double y, double w, double h)
 {
-    double *r = malloc(4 * sizeof(double));
-
-    if (!r)
-        return NULL;
-    r[0] = x;
-    r[1] = y;
-    r[2] = w;
-    r[3] = h;
-    return r;
+    return (ui_rect){x, y, w, h};
 }
 
 static void *color_new(double r, double g, double b, double a)
@@ -171,50 +189,61 @@ static void *color_new(double r, double g, double b, double a)
 static void *v_init(void *self, const char *sel)
 {
     (void)sel;
-    if (self && !((ui_view *)self)->kids)
-        view_init((ui_view *)self, 0, 0, (double)g_vw, (double)g_vh);
+    ui_view *v = as_view(self);
+    if (v) view_init(v, 0, 0, g_vw, g_vh);
     return self;
 }
 
-static void *v_init_frame(void *self, const char *sel, double x, double y, double w, double h)
+static void *v_init_frame(void *self, const char *sel, ui_rect rect)
 {
     (void)sel;
-    if (self)
-        view_init((ui_view *)self, x, y, w, h);
+    ui_view *v = as_view(self);
+    if (!v) return NULL;
+    view_init(v, rect.x, rect.y, rect.w, rect.h);
     return self;
 }
 
-static void *v_frame(void *self, const char *sel)
+static void *win_init_scene(void *self, const char *sel, void *scene)
 {
+    if (!chm_objc_is_kind(self, "UIWindow") || !chm_objc_is_kind(scene, "UIWindowScene")) return NULL;
     ui_view *v = as_view(self);
-
+    if (!v) return NULL;
     (void)sel;
-    if (!v)
-        return NULL;
-    return n_rect(v->x, v->y, v->w, v->h);
+    v->scene = scene;
+    view_init(v, 0, 0, g_vw, g_vh);
+    return self;
 }
 
-static void v_set_frame(void *self, const char *sel, double x, double y, double w, double h)
+static void *win_scene(void *self, const char *sel)
 {
-    ui_view *v = as_view(self);
-
     (void)sel;
-    if (!v)
-        return;
-    v->x = x;
-    v->y = y;
-    v->w = w;
-    v->h = h;
+    ui_view *v = as_view(self);
+    return v ? v->scene : NULL;
 }
 
-static void *v_bounds(void *self, const char *sel)
+static ui_rect v_frame(void *self, const char *sel)
 {
-    ui_view *v = as_view(self);
-
     (void)sel;
-    if (v)
-        return n_rect(0, 0, v->w, v->h);
-    return n_rect(0, 0, (double)g_vw, (double)g_vh);
+    ui_view *v = as_view(self);
+    return v ? n_rect(v->x, v->y, v->w, v->h) : n_rect(0, 0, 0, 0);
+}
+
+static void v_set_frame(void *self, const char *sel, ui_rect rect)
+{
+    (void)sel;
+    ui_view *v = as_view(self);
+    if (!v) return;
+    v->x = rect.x;
+    v->y = rect.y;
+    v->w = rect.w;
+    v->h = rect.h;
+}
+
+static ui_rect v_bounds(void *self, const char *sel)
+{
+    (void)sel;
+    ui_view *v = as_view(self);
+    return v ? n_rect(0, 0, v->w, v->h) : n_rect(0, 0, g_vw, g_vh);
 }
 
 static void *v_background(void *self, const char *sel)
@@ -271,14 +300,15 @@ static void *v_subviews(void *self, const char *sel)
     if (!arr)
         return NULL;
     for (i = 0; i < v->nkids; i++)
-        chm_objc_send1(arr, "addObject:", v->kids[i]);
+        chm_objc_send1(arr, "addObject:", v->kids[i]->object);
     return arr;
 }
 
 static void *v_superview(void *self, const char *sel)
 {
     (void)sel;
-    return as_view(self) ? as_view(self)->parent : NULL;
+    ui_view *v = as_view(self);
+    return v && v->parent ? v->parent->object : NULL;
 }
 
 static int v_hidden(void *self, const char *sel)
@@ -390,25 +420,38 @@ static void l_set_alignment(void *self, const char *sel, int64_t a)
         as_view(self)->font_align = (int)a;
 }
 
+static void wc_load_view(void *self, const char *sel)
+{
+    (void)sel;
+    ui_vc *vc = as_vc(self);
+    if (!vc || vc->view) return;
+    void *object = chm_foundation_alloc_obj("UIView", 0);
+    ui_view *v = as_view(object);
+    if (!v) return;
+    view_init(v, 0, 0, g_vw, g_vh);
+    v->owner = self;
+    vc->view = object;
+}
+
 static void *wc_view(void *self, const char *sel)
 {
-    ui_vc *vc = as_vc(self);
-    void *created;
-    ui_view *v;
-
     (void)sel;
-    if (!vc)
-        return NULL;
-    if (vc->view)
-        return vc->view;
-    created = chm_foundation_alloc_obj("UIView", 1024);
-    if (!created)
-        return NULL;
-    v = as_view(created);
-    view_init(v, 0, 0, (double)g_vw, (double)g_vh);
-    v->owner = self;
-    vc->view = created;
-    v->bg = argb(0.11, 0.11, 0.12, 1);
+    ui_vc *vc = as_vc(self);
+    if (!vc) return NULL;
+    if (vc->loading || vc->loaded) return vc->view;
+    vc->loading = 1;
+    if (!vc->view) {
+        const char *load = "loadView";
+        void (*fn)(void *, const char *) = chm_objc_find_imp(self, load);
+        if (fn) fn(self, load);
+    }
+    if (vc->view) {
+        vc->loaded = 1;
+        const char *ready = "viewDidLoad";
+        void (*fn)(void *, const char *) = chm_objc_find_imp(self, ready);
+        if (fn) fn(self, ready);
+    }
+    vc->loading = 0;
     return vc->view;
 }
 
@@ -420,6 +463,7 @@ static void wc_set_view(void *self, const char *sel, void *view)
     if (!vc)
         return;
     vc->view = view;
+    if (!view) vc->loaded = 0;
     if (as_view(view))
         as_view(view)->owner = self;
 }
@@ -485,7 +529,7 @@ static void win_make_key(void *self, const char *sel)
     ui_view *v = as_view(self);
 
     (void)sel;
-    if (!v)
+    if (!v || !chm_objc_is_kind(self, "UIWindow"))
         return;
     v->hidden = 0;
     g_key_window = v;
@@ -499,23 +543,22 @@ static int win_is_key(void *self, const char *sel)
 
 static void win_set_root_vc(void *self, const char *sel, void *vc)
 {
-    ui_view *v = as_view(self);
-    void *child;
-    ui_view *cv;
-
     (void)sel;
-    if (!v || !vc)
-        return;
-    child = chm_objc_send0(vc, "view");
-    if (!child)
-        return;
-    cv = as_view(child);
-    cv->x = 0;
-    cv->y = 0;
-    cv->w = v->w;
-    cv->h = v->h;
-    view_add(v, cv);
-    v->owner = vc;
+    ui_view *v = as_view(self);
+    if (!v || !chm_objc_is_kind(self, "UIWindow")) return;
+    ui_view *child = vc ? as_view(chm_objc_send0(vc, "view")) : NULL;
+    if (vc && !child) return;
+    if (v->owner) {
+        ui_vc *previous = as_vc(v->owner);
+        if (previous) view_remove(as_view(previous->view));
+    }
+    v->owner = NULL;
+    if (!child) return;
+    child->x = 0;
+    child->y = 0;
+    child->w = v->w;
+    child->h = v->h;
+    if (view_add(v, child)) v->owner = vc;
 }
 
 static void *win_root_vc(void *self, const char *sel)
@@ -569,7 +612,7 @@ static void *app_key_window(void *self, const char *sel)
 {
     (void)self;
     (void)sel;
-    return g_key_window;
+    return g_key_window ? g_key_window->object : NULL;
 }
 
 static void *app_windows(void *self, const char *sel)
@@ -582,7 +625,7 @@ static void *app_windows(void *self, const char *sel)
     if (!arr)
         return NULL;
     if (g_key_window)
-        chm_objc_send1(arr, "addObject:", g_key_window);
+        chm_objc_send1(arr, "addObject:", g_key_window->object);
     return arr;
 }
 
@@ -696,15 +739,26 @@ int chm_ui_main(int argc, char **argv, void *principal, void *delegate_name)
         if (delegate)
             app_set_delegate(app, NULL, delegate);
     }
-    if (delegate) {
-        chm_objc_send2(delegate, "application:didFinishLaunchingWithOptions:", app, NULL);
-        g_running = 1;
-        chm_session_log(g_sess, "ui: launched key_window=%s views=%d",
-                        g_key_window ? "yes" : "no", chm_ui_view_count());
-        chm_objc_send1(delegate, "applicationDidBecomeActive:", app);
-    } else {
-        chm_session_log(g_sess, "ui: no delegate instance");
+    const char *finish = "application:didFinishLaunchingWithOptions:";
+    signed char (*did_finish)(void *, const char *, void *, void *) = chm_objc_find_imp(delegate, finish);
+    if (did_finish && !did_finish(delegate, finish, app, NULL)) {
+        chm_session_log(g_sess, "ui: delegate declined launch");
+        return 1;
     }
+    if (dn && *dn && !delegate) {
+        chm_session_log(g_sess, "ui: could not instantiate delegate %s", dn);
+        return 1;
+    }
+    int connected = chm_scene_connect(g_sess, app, delegate);
+    if (connected < 0) return 1;
+    g_running = 1;
+    if (!connected) {
+        const char *active = "applicationDidBecomeActive:";
+        void (*became_active)(void *, const char *, void *) = chm_objc_find_imp(delegate, active);
+        if (became_active) became_active(delegate, active, app);
+    }
+    chm_session_log(g_sess, "ui: launched key_window=%s views=%d",
+                    g_key_window ? "yes" : "no", chm_ui_view_count());
     return 0;
 }
 
@@ -832,6 +886,9 @@ static const struct {
     const char *sel;
     void *imp;
 } g_ui_methods[] = {
+    { "initWithWindowScene:", (void *)win_init_scene },
+    { "windowScene", (void *)win_scene },
+    { "loadView", (void *)wc_load_view },
     { "initWithFrame:", (void *)v_init_frame },
     { "initWithCoder:", (void *)v_init },
     { "frame", (void *)v_frame },
@@ -895,17 +952,36 @@ static const struct {
     { NULL, NULL }
 };
 
-void chm_ui_init(chm_session *s)
+void chm_ui_shutdown(chm_session *s)
 {
-    int i;
-
-    if (!s)
-        return;
-    g_sess = s;
+    if (!s || s != g_sess) return;
+    while (views) {
+        ui_view *next = views->next;
+        free(views->kids);
+        free(views);
+        views = next;
+    }
+    while (controllers) {
+        ui_vc *next = controllers->next;
+        free(controllers);
+        controllers = next;
+    }
+    chm_scene_reset();
+    g_sess = NULL;
     g_app = NULL;
     g_screen = NULL;
     g_key_window = NULL;
     g_running = 0;
+}
+
+void chm_ui_init(chm_session *s)
+{
+    int i;
+
+    if (!s) return;
+    chm_ui_shutdown(g_sess);
+    g_sess = s;
+    chm_scene_application_role = chm_foundation_string(CHM_APPLICATION_ROLE);
     for (i = 0; g_ui_methods[i].sel; i++) {
         chm_method_reg m;
 

@@ -94,6 +94,8 @@ void *chm_objc_session_lookup(chm_session *s, const char *name);
 void *chm_objc_msgSend_bridge(void);
 void *chm_objc_msgSendSuper2_bridge(void);
 void *chm_objc_resolve_imp(void *self, const char *sel);
+void *chm_objc_find_imp(void *self, const char *sel);
+int chm_objc_is_kind(void *obj, const char *name);
 void *chm_objc_resolve_super2_imp(void *super_ptr, const char *sel);
 void chm_objc_dump_trace(chm_session *s);
 const char *chm_objc_class_name(void *cls);
@@ -147,6 +149,7 @@ uint64_t chm_trap_fault_addr(void);
 int chm_ui_main(int argc, char **argv, void *principal, void *delegate_name);
 
 void chm_ui_init(chm_session *s);
+void chm_ui_shutdown(chm_session *s);
 int chm_ui_viewport(int w, int h);
 int chm_ui_running(void);
 int chm_ui_render(uint32_t *buf, int bw, int bh);

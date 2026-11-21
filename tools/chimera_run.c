@@ -54,6 +54,23 @@ int main(int argc, char **argv)
     } else {
         printf("entry returned %d\n", rc);
     }
+    const char *frame_path = getenv("CHM_FRAME_OUT");
+    if (rc == 0 && frame_path && *frame_path) {
+        size_t count = 720u * 1280u;
+        uint32_t *pixels = calloc(count, sizeof(*pixels));
+        if (!pixels || chm_ui_render(pixels, 720, 1280) != 1) {
+            fprintf(stderr, "frame unavailable\n");
+            rc = 4;
+        } else {
+            FILE *file = fopen(frame_path, "wb");
+            if (!file) rc = 5;
+            else {
+                if (fwrite(pixels, sizeof(*pixels), count, file) != count) rc = 5;
+                if (fclose(file)) rc = 5;
+            }
+        }
+        free(pixels);
+    }
     chm_session_destroy(s);
     return rc;
 }

@@ -52,6 +52,9 @@ __attribute__((objc_root_class))
 - (NSUInteger)count;
 - (id)objectForKey:(id)key;
 - (id)objectForKeyedSubscript:(id)key;
+- (id)valueForKey:(NSString *)key;
+- (id)valueForKeyPath:(NSString *)path;
+- (void)setValue:(id)value forKeyPath:(NSString *)path;
 - (NSUInteger)countByEnumeratingWithState:(FastState *)state objects:(id *)objects count:(NSUInteger)count;
 @end
 
@@ -105,6 +108,18 @@ int main(int argc, char **argv)
     NSDictionary *defaults = @{ @"general": @{ @"debug_logging": @1, @"game_directory": @"default" }, @"scale": @1.25 };
     if ([defaults count] != 2 || ![defaults[@"general"] count]) return 46;
     if (![defaults[@"general"] objectForKey:@"debug_logging"] || [defaults objectForKey:@"missing"] != (id)0) return 47;
+    if (![[defaults valueForKeyPath:@"general.debug_logging"] boolValue]) return 80;
+    if (!same([defaults valueForKeyPath:@"general.game_directory"], "default")) return 81;
+    if ([defaults valueForKeyPath:@"general.absent"] || [defaults valueForKeyPath:@"absent.item"]) return 82;
+    NSMutableDictionary *nested = [defaults[@"general"] mutableCopy];
+    NSMutableDictionary *paths = [NSMutableDictionary new];
+    paths[@"general"] = nested;
+    [paths setValue:@"custom" forKeyPath:@"general.game_directory"];
+    if (!same(nested[@"game_directory"], "custom")) return 83;
+    [paths setValue:(id)0 forKeyPath:@"general.game_directory"];
+    if (nested[@"game_directory"]) return 84;
+    [paths setValue:@1 forKeyPath:@"absent.item"];
+    if (paths[@"absent"]) return 85;
     NSMutableDictionary *copy = [defaults mutableCopy];
     copy[@"scale"] = @2.5;
     if ([copy count] != 2 || [copy[@"scale"] doubleValue] != 2.5 || [defaults[@"scale"] doubleValue] != 1.25) return 48;
