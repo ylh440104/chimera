@@ -74,6 +74,7 @@ int chm_foundation_map_path_write(const char *in, char *out, size_t cap)
 #define FO_DATA_MAGIC 0x464f444154ull
 #define FO_ARRAY_MAGIC 0x464f415252ull
 #define FO_DICT_MAGIC 0x464f444943ull
+#define FO_NUMBER_MAGIC 0x464f4e554dull
 
 typedef struct {
     uint32_t flags;
@@ -123,16 +124,35 @@ typedef struct {
     void *isa;
     uint64_t magic;
     int64_t count;
-    void *items[FO_MAX_ITEMS];
+    size_t capacity;
+    unsigned long mutations;
+    void **items;
 } fo_array;
 
 typedef struct {
     void *isa;
     uint64_t magic;
     int64_t count;
-    void *keys[FO_MAX_ITEMS];
-    void *values[FO_MAX_ITEMS];
+    size_t capacity;
+    unsigned long mutations;
+    void **keys;
+    void **values;
 } fo_dict;
+
+typedef struct {
+    void *isa;
+    uint64_t magic;
+    char type;
+    union { int64_t signed_value; uint64_t unsigned_value; double real_value; } value;
+    char text[96];
+} fo_number;
+
+typedef struct {
+    unsigned long state;
+    void **items;
+    unsigned long *mutations;
+    unsigned long extra[5];
+} fo_enum_state;
 
 typedef struct {
     char *key;
@@ -354,20 +374,63 @@ static const char *fo_class_name(void *cls)
     return cls ? "foreign-class" : "nil-class";
 }
 
+static int fo_descends(fo_class *c, const char *name)
+{
+    for (; c; c = c->parent)
+        if (!strcmp(c->name, name))
+            return 1;
+    return 0;
+}
+
+void *chm_foundation_alloc_class(void *cls, size_t min)
+{
+    fo_class *c = fo_owning(cls);
+    if (!c || cls != &c->cls)
+        return NULL;
+    size_t size = c->ro.instance_size;
+    uint64_t magic = 0;
+    if (fo_descends(c, "NSArray")) {
+        if (size < sizeof(fo_array)) size = sizeof(fo_array);
+        magic = FO_ARRAY_MAGIC;
+    } else if (fo_descends(c, "NSDictionary")) {
+        if (size < sizeof(fo_dict)) size = sizeof(fo_dict);
+        magic = FO_DICT_MAGIC;
+    } else if (fo_descends(c, "NSNumber")) {
+        if (size < sizeof(fo_number)) size = sizeof(fo_number);
+        magic = FO_NUMBER_MAGIC;
+    } else if (fo_descends(c, "NSString")) {
+        if (size < sizeof(fo_string)) size = sizeof(fo_string);
+        magic = FO_STRING_MAGIC;
+    } else if (fo_descends(c, "NSData")) {
+        if (size < sizeof(fo_data)) size = sizeof(fo_data);
+        magic = FO_DATA_MAGIC;
+    }
+    if (size < min) size = min;
+    void *obj = calloc(1, size);
+    if (!obj) return NULL;
+    *(void **)obj = cls;
+    if (magic) memcpy((char *)obj + sizeof(void *), &magic, sizeof(magic));
+    if (magic == FO_ARRAY_MAGIC) {
+        fo_array *a = obj;
+        a->capacity = FO_MAX_ITEMS;
+        a->items = calloc(a->capacity, sizeof(void *));
+        if (!a->items) { free(a); return NULL; }
+    } else if (magic == FO_DICT_MAGIC) {
+        fo_dict *d = obj;
+        d->capacity = FO_MAX_ITEMS;
+        d->keys = calloc(d->capacity, sizeof(void *));
+        d->values = calloc(d->capacity, sizeof(void *));
+        if (!d->keys || !d->values) { free(d->keys); free(d->values); free(d); return NULL; }
+    } else if (magic == FO_NUMBER_MAGIC) {
+        ((fo_number *)obj)->type = 'q';
+    }
+    return obj;
+}
+
 static void *fo_alloc(const char *cls_name, size_t min)
 {
     fo_class *c = fo_find(cls_name);
-    size_t size = c ? c->ro.instance_size : 0;
-    void *obj;
-
-    if (size < min)
-        size = min;
-    obj = calloc(1, size);
-    if (!obj)
-        return NULL;
-    if (c)
-        *(void **)obj = &c->cls;
-    return obj;
+    return c ? chm_foundation_alloc_class(&c->cls, min) : NULL;
 }
 
 static int fo_isa_is(void *obj, const char *cls_name)
@@ -417,6 +480,40 @@ static int fo_is_dict(void *p)
     return ((fo_dict *)p)->magic == FO_DICT_MAGIC;
 }
 
+static int fo_is_number(void *p)
+{
+    return p && (uintptr_t)p >= FO_MIN_PTR && ((fo_number *)p)->magic == FO_NUMBER_MAGIC;
+}
+
+static void *n_signed(void *cls, const char *sel, int64_t value)
+{
+    (void)cls; (void)sel;
+    fo_number *n = fo_alloc("NSNumber", sizeof(fo_number));
+    if (n) { n->type = 'q'; n->value.signed_value = value; }
+    return n;
+}
+
+static void *n_unsigned(void *cls, const char *sel, uint64_t value)
+{
+    (void)cls; (void)sel;
+    fo_number *n = fo_alloc("NSNumber", sizeof(fo_number));
+    if (n) { n->type = 'Q'; n->value.unsigned_value = value; }
+    return n;
+}
+
+static void *n_double(void *cls, const char *sel, double value)
+{
+    (void)cls; (void)sel;
+    fo_number *n = fo_alloc("NSNumber", sizeof(fo_number));
+    if (n) { n->type = 'd'; n->value.real_value = value; }
+    return n;
+}
+
+static void *n_int(void *c, const char *s, int v) { return n_signed(c, s, v); }
+static void *n_uint(void *c, const char *s, unsigned int v) { return n_unsigned(c, s, v); }
+static void *n_bool(void *c, const char *s, signed char v) { return n_signed(c, s, v != 0); }
+static void *n_float(void *c, const char *s, float v) { return n_double(c, s, v); }
+
 static int fo_is_handle(void *p)
 {
     if (!p || (uintptr_t)p < FO_MIN_PTR)
@@ -456,15 +553,20 @@ static int fo_is_cfstring(void *p)
 
 static const char *fo_bytes(void *p)
 {
-    if (fo_is_string(p))
-        return ((fo_string *)p)->bytes;
+    if (fo_is_string(p)) {
+        const char *bytes = ((fo_string *)p)->bytes;
+        return bytes ? bytes : "";
+    }
     if (fo_is_cfstring(p)) {
         const char *s = *(const char *const *)((const uint8_t *)p + 16);
-
-        if (s)
-            return s;
+        if (s) return s;
     }
     return "";
+}
+
+const char *chm_foundation_cstr(void *obj)
+{
+    return fo_bytes(obj);
 }
 
 static void *fo_string_new(const char *bytes)
@@ -523,6 +625,52 @@ static void *fo_dict_new(void)
         return NULL;
     d->magic = FO_DICT_MAGIC;
     return d;
+}
+
+static int a_reserve(fo_array *a, size_t need)
+{
+    if (need <= a->capacity) return 1;
+    if (need > SIZE_MAX / sizeof(void *) || need > INT64_MAX) return 0;
+    size_t cap = a->capacity <= SIZE_MAX / 2 ? a->capacity * 2 : need;
+    if (cap < need) cap = need;
+    if (cap > SIZE_MAX / sizeof(void *)) cap = need;
+    void **items = realloc(a->items, cap * sizeof(void *));
+    if (!items) return 0;
+    a->items = items;
+    a->capacity = cap;
+    return 1;
+}
+
+static int d_reserve(fo_dict *d, size_t need)
+{
+    if (need <= d->capacity) return 1;
+    if (need > SIZE_MAX / sizeof(void *) || need > INT64_MAX) return 0;
+    size_t cap = d->capacity <= SIZE_MAX / 2 ? d->capacity * 2 : need;
+    if (cap < need) cap = need;
+    if (cap > SIZE_MAX / sizeof(void *)) cap = need;
+    void **keys = malloc(cap * sizeof(void *));
+    void **values = malloc(cap * sizeof(void *));
+    if (!keys || !values) { free(keys); free(values); return 0; }
+    if (d->count) {
+        memcpy(keys, d->keys, (size_t)d->count * sizeof(void *));
+        memcpy(values, d->values, (size_t)d->count * sizeof(void *));
+    }
+    free(d->keys); free(d->values);
+    d->keys = keys; d->values = values; d->capacity = cap;
+    return 1;
+}
+
+static int a_push(fo_array *a, void *obj)
+{
+    if (!obj || !a_reserve(a, (size_t)a->count + 1)) return 0;
+    a->items[a->count++] = obj;
+    a->mutations++;
+    return 1;
+}
+
+static void collection_error(const char *operation)
+{
+    chm_session_log(g_session, "foundation collection operation failed: %s", operation);
 }
 
 static void *fo_pair_get(const char *key)
@@ -661,10 +809,28 @@ static void *s_data_with_bytes(void *cls, const char *sel, const void *bytes, in
 static int o_is_equal(void *self, const char *sel, void *other)
 {
     (void)sel;
-    if (self == other)
-        return 1;
-    if (fo_is_string(self) && fo_is_string(other))
+    if (self == other) return 1;
+    if (!self || !other) return 0;
+    if ((fo_is_string(self) || fo_is_cfstring(self)) &&
+        (fo_is_string(other) || fo_is_cfstring(other)))
         return strcmp(fo_bytes(self), fo_bytes(other)) == 0;
+    if (fo_is_number(self) && fo_is_number(other)) {
+        fo_number *a = self, *b = other;
+        if (a->type == 'd' || b->type == 'd') {
+            if (a->type != 'd') { fo_number *t = a; a = b; b = t; }
+            double x = a->value.real_value;
+            if (b->type == 'd') return x == b->value.real_value;
+            if (b->type == 'Q')
+                return x >= 0 && x < 0x1p64 && (uint64_t)x == b->value.unsigned_value &&
+                       x == (double)b->value.unsigned_value;
+            return x >= -0x1p63 && x < 0x1p63 && (int64_t)x == b->value.signed_value &&
+                   x == (double)b->value.signed_value;
+        }
+        if (a->type == 'Q' && b->type == 'Q') return a->value.unsigned_value == b->value.unsigned_value;
+        if (a->type == 'q' && b->type == 'q') return a->value.signed_value == b->value.signed_value;
+        if (a->type == 'Q') { fo_number *t = a; a = b; b = t; }
+        return a->value.signed_value >= 0 && (uint64_t)a->value.signed_value == b->value.unsigned_value;
+    }
     return 0;
 }
 
@@ -727,22 +893,64 @@ static void *o_description(void *self, const char *sel)
 
 static int64_t o_integer(void *self)
 {
-    return fo_is_string(self) ? strtoll(((fo_string *)self)->bytes, NULL, 10) : 0;
+    if (fo_is_number(self)) {
+        fo_number *n = self;
+        if (n->type == 'Q') return (int64_t)n->value.unsigned_value;
+        if (n->type == 'd') {
+            double v = n->value.real_value;
+            if (v != v) return 0;
+            if (v >= 0x1p63) return INT64_MAX;
+            if (v <= -0x1p63) return INT64_MIN;
+            return (int64_t)v;
+        }
+        return n->value.signed_value;
+    }
+    return strtoll(fo_bytes(self), NULL, 10);
+}
+
+static uint64_t o_unsigned(void *self)
+{
+    if (fo_is_number(self)) {
+        fo_number *n = self;
+        if (n->type == 'Q') return n->value.unsigned_value;
+        if (n->type == 'd') {
+            double v = n->value.real_value;
+            if (v != v || v <= 0) return 0;
+            if (v >= 0x1p64) return UINT64_MAX;
+            return (uint64_t)v;
+        }
+        return (uint64_t)n->value.signed_value;
+    }
+    return strtoull(fo_bytes(self), NULL, 10);
 }
 
 static double o_double(void *self)
 {
-    return fo_is_string(self) ? strtod(((fo_string *)self)->bytes, NULL) : 0.0;
+    if (fo_is_number(self)) {
+        fo_number *n = self;
+        if (n->type == 'Q') return (double)n->value.unsigned_value;
+        if (n->type == 'd') return n->value.real_value;
+        return (double)n->value.signed_value;
+    }
+    return strtod(fo_bytes(self), NULL);
+}
+
+static float o_float(void *self)
+{
+    return (float)o_double(self);
 }
 
 static int o_bool(void *self)
 {
-    const char *b;
-
-    if (!fo_is_string(self))
-        return 0;
-    b = ((fo_string *)self)->bytes;
-    return b && (b[0] == '1' || b[0] == 't' || b[0] == 'T' || b[0] == 'y' || b[0] == 'Y');
+    if (fo_is_number(self)) {
+        fo_number *n = self;
+        if (n->type == 'd') return n->value.real_value != 0.0;
+        if (n->type == 'Q') return n->value.unsigned_value != 0;
+        return n->value.signed_value != 0;
+    }
+    const char *b = fo_bytes(self);
+    while (*b == ' ' || *b == '\t' || *b == '\n') b++;
+    return *b == 't' || *b == 'T' || *b == 'y' || *b == 'Y' || strtoll(b, NULL, 10) != 0;
 }
 
 static void *s_identity(void *self)
@@ -913,38 +1121,22 @@ static int s_is_absolute(void *self)
 
 static void *s_split(void *self, const char *sel, void *sep)
 {
-    const char *base = fo_bytes(self);
-    const char *s = fo_bytes(sep);
-    fo_array *arr;
-    char *copy;
-    char *cursor;
-    size_t seplen;
-
     (void)sel;
-
-    if (!s[0])
-        return NULL;
-    arr = (fo_array *)fo_array_new();
-    if (!arr)
-        return NULL;
-    seplen = strlen(s);
-    copy = strdup(base);
-    if (!copy) {
-        free(arr);
-        return NULL;
-    }
-    cursor = copy;
+    const char *s = fo_bytes(sep);
+    fo_array *arr = fo_array_new();
+    if (!arr) return NULL;
+    char *copy = strdup(fo_bytes(self));
+    if (!copy) { free(arr->items); free(arr); return NULL; }
+    size_t seplen = strlen(s);
+    char *cursor = copy;
     for (;;) {
-        char *hit = strstr(cursor, s);
-
-        if (!hit) {
-            if (arr->count < FO_MAX_ITEMS)
-                arr->items[arr->count++] = fo_string_new(cursor);
-            break;
+        char *hit = seplen ? strstr(cursor, s) : NULL;
+        if (hit) *hit = 0;
+        if (!a_push(arr, fo_string_new(cursor))) {
+            free(copy); free(arr->items); free(arr);
+            return NULL;
         }
-        *hit = 0;
-        if (arr->count < FO_MAX_ITEMS)
-            arr->items[arr->count++] = fo_string_new(cursor);
+        if (!hit) break;
         cursor = hit + seplen;
     }
     free(copy);
@@ -1035,39 +1227,34 @@ static int s_has_suffix(void *self, const char *sel, void *suffix)
 
 static void *a_object_at(void *self, const char *sel, int64_t idx)
 {
-    fo_array *a = self;
-
     (void)sel;
-    if (!fo_is_array(a) || idx < 0 || idx >= a->count)
-        return fo_string_new("");
+    fo_array *a = self;
+    if (!fo_is_array(a) || idx < 0 || idx >= a->count) {
+        collection_error("objectAtIndex: out of range");
+        return NULL;
+    }
     return a->items[idx];
 }
 
 static void *a_first(void *self, const char *sel)
 {
     (void)sel;
-    return a_object_at(self, NULL, 0);
+    fo_array *a = self;
+    return fo_is_array(a) && a->count ? a->items[0] : NULL;
 }
 
 static void *a_last(void *self, const char *sel)
 {
-    fo_array *a = self;
-
     (void)sel;
-    if (!fo_is_array(a) || a->count == 0)
-        return fo_string_new("");
-    return a->items[a->count - 1];
+    fo_array *a = self;
+    return fo_is_array(a) && a->count ? a->items[a->count - 1] : NULL;
 }
 
 static void a_add(void *self, const char *sel, void *obj)
 {
-    fo_array *a = self;
-
     (void)sel;
-    if (!fo_is_array(a))
-        return;
-    if (a->count < FO_MAX_ITEMS)
-        a->items[a->count++] = obj;
+    if (!fo_is_array(self) || !a_push(self, obj))
+        collection_error("addObject:");
 }
 
 static void *a_joined(void *self, const char *sel, void *sep)
@@ -1097,65 +1284,230 @@ static void *a_joined(void *self, const char *sel, void *sep)
     return out;
 }
 
+static int64_t d_index(fo_dict *d, void *key)
+{
+    if (!fo_is_dict(d) || !key) return -1;
+    for (int64_t i = 0; i < d->count; i++)
+        if (o_is_equal(d->keys[i], NULL, key)) return i;
+    return -1;
+}
+
 static void *d_value(void *self, const char *sel, void *key)
 {
-    fo_dict *d = self;
-    const char *k = fo_bytes(key);
-
     (void)sel;
+    fo_dict *d = self;
+    int64_t i = d_index(d, key);
+    return i >= 0 ? d->values[i] : NULL;
+}
 
-    if (!fo_is_dict(d))
-        return fo_string_new("");
-    for (int64_t i = 0; i < d->count; i++) {
-        if (strcmp(fo_bytes(d->keys[i]), k) == 0)
-            return d->values[i];
+static int d_put(fo_dict *d, void *key, void *obj)
+{
+    if (!fo_is_dict(d) || !key || !obj) return 0;
+    int64_t i = d_index(d, key);
+    if (i >= 0) {
+        d->values[i] = obj;
+        d->mutations++;
+        return 1;
     }
-    return fo_string_new("");
+    if (!d_reserve(d, (size_t)d->count + 1)) return 0;
+    void *stored_key = key;
+    if (fo_is_string(key) || fo_is_cfstring(key)) stored_key = fo_string_new(fo_bytes(key));
+    if (!stored_key) return 0;
+    d->keys[d->count] = stored_key;
+    d->values[d->count++] = obj;
+    d->mutations++;
+    return 1;
+}
+
+static void d_remove(void *self, const char *sel, void *key)
+{
+    (void)sel;
+    fo_dict *d = self;
+    int64_t i = d_index(d, key);
+    if (i < 0) return;
+    size_t n = (size_t)(d->count - i - 1);
+    memmove(d->keys + i, d->keys + i + 1, n * sizeof(void *));
+    memmove(d->values + i, d->values + i + 1, n * sizeof(void *));
+    d->count--;
+    d->keys[d->count] = d->values[d->count] = NULL;
+    d->mutations++;
 }
 
 static void d_set(void *self, const char *sel, void *obj, void *key)
 {
-    fo_dict *d = self;
-
     (void)sel;
+    if (!d_put(self, key, obj)) collection_error("setObject:forKey:");
+}
 
-    if (!fo_is_dict(d))
-        return;
-    if (d->count < FO_MAX_ITEMS) {
-        d->keys[d->count] = key;
-        d->values[d->count] = obj;
-        d->count++;
-    }
+static void d_set_subscript(void *self, const char *sel, void *obj, void *key)
+{
+    if (obj) d_set(self, sel, obj, key);
+    else d_remove(self, sel, key);
 }
 
 static void *d_keys(void *self)
 {
     fo_dict *d = self;
-    fo_array *a;
-
-    if (!fo_is_dict(d))
-        return NULL;
-    a = (fo_array *)fo_array_new();
-    if (!a)
-        return NULL;
-    for (int64_t i = 0; i < d->count && a->count < FO_MAX_ITEMS; i++)
-        a->items[a->count++] = d->keys[i];
+    if (!fo_is_dict(d)) return NULL;
+    fo_array *a = fo_array_new();
+    if (!a) return NULL;
+    if (!a_reserve(a, (size_t)d->count)) { free(a->items); free(a); return NULL; }
+    memcpy(a->items, d->keys, (size_t)d->count * sizeof(void *));
+    a->count = d->count;
     return a;
 }
 
 static void *d_values(void *self)
 {
     fo_dict *d = self;
-    fo_array *a;
-
-    if (!fo_is_dict(d))
-        return NULL;
-    a = (fo_array *)fo_array_new();
-    if (!a)
-        return NULL;
-    for (int64_t i = 0; i < d->count && a->count < FO_MAX_ITEMS; i++)
-        a->items[a->count++] = d->values[i];
+    if (!fo_is_dict(d)) return NULL;
+    fo_array *a = fo_array_new();
+    if (!a) return NULL;
+    if (!a_reserve(a, (size_t)d->count)) { free(a->items); free(a); return NULL; }
+    memcpy(a->items, d->values, (size_t)d->count * sizeof(void *));
+    a->count = d->count;
     return a;
+}
+
+static void collection_dispose(void *obj)
+{
+    if (fo_is_array(obj)) free(((fo_array *)obj)->items);
+    else if (fo_is_dict(obj)) { free(((fo_dict *)obj)->keys); free(((fo_dict *)obj)->values); }
+    free(obj);
+}
+
+static void *collection_capacity(void *self, const char *sel, size_t capacity)
+{
+    (void)sel;
+    if (fo_is_array(self)) return a_reserve(self, capacity) ? self : NULL;
+    if (fo_is_dict(self)) return d_reserve(self, capacity) ? self : NULL;
+    return NULL;
+}
+
+static void *collection_empty(void *cls, const char *sel)
+{
+    (void)sel;
+    void *obj = chm_foundation_alloc_class(cls, 0);
+    if (fo_is_array(obj) || fo_is_dict(obj)) return obj;
+    free(obj);
+    return NULL;
+}
+
+static void *collection_with_capacity(void *cls, const char *sel, size_t capacity)
+{
+    void *obj = collection_empty(cls, sel);
+    if (obj && !collection_capacity(obj, sel, capacity)) { collection_dispose(obj); return NULL; }
+    return obj;
+}
+
+static void *a_init_objects(void *self, const char *sel, void *const *objects, size_t count)
+{
+    (void)sel;
+    fo_array *a = self;
+    if (!fo_is_array(a) || (count && !objects)) return NULL;
+    for (size_t i = 0; i < count; i++) if (!objects[i]) return NULL;
+    if (!a_reserve(a, count)) return NULL;
+    if (count) memmove(a->items, objects, count * sizeof(void *));
+    a->count = (int64_t)count;
+    a->mutations++;
+    return a;
+}
+
+static void *a_with_objects(void *cls, const char *sel, void *const *objects, size_t count)
+{
+    void *a = collection_empty(cls, sel);
+    if (a && !a_init_objects(a, sel, objects, count)) { collection_dispose(a); return NULL; }
+    return a;
+}
+
+static void *a_with_object(void *cls, const char *sel, void *obj)
+{
+    return a_with_objects(cls, sel, &obj, 1);
+}
+
+static void *a_with_array(void *cls, const char *sel, void *other)
+{
+    if (!fo_is_array(other)) return NULL;
+    fo_array *a = other;
+    return a_with_objects(cls, sel, a->items, (size_t)a->count);
+}
+
+static void *d_init_objects(void *self, const char *sel, void *const *objects, void *const *keys, size_t count)
+{
+    (void)sel;
+    fo_dict *d = self;
+    if (!fo_is_dict(d) || (count && (!objects || !keys))) return NULL;
+    for (size_t i = 0; i < count; i++) if (!objects[i] || !keys[i]) return NULL;
+    if (!d_reserve(d, count)) return NULL;
+    d->count = 0;
+    d->mutations++;
+    for (size_t i = 0; i < count; i++) if (!d_put(d, keys[i], objects[i])) return NULL;
+    return d;
+}
+
+static void *d_with_objects(void *cls, const char *sel, void *const *objects, void *const *keys, size_t count)
+{
+    void *d = collection_empty(cls, sel);
+    if (d && !d_init_objects(d, sel, objects, keys, count)) { collection_dispose(d); return NULL; }
+    return d;
+}
+
+static void *d_with_object(void *cls, const char *sel, void *obj, void *key)
+{
+    return d_with_objects(cls, sel, &obj, &key, 1);
+}
+
+static void *d_with_dictionary(void *cls, const char *sel, void *other)
+{
+    if (!fo_is_dict(other)) return NULL;
+    fo_dict *d = other;
+    return d_with_objects(cls, sel, d->values, d->keys, (size_t)d->count);
+}
+
+static void d_add_entries(void *self, const char *sel, void *other)
+{
+    (void)sel;
+    if (!fo_is_dict(self) || !fo_is_dict(other) || self == other) return;
+    fo_dict *d = other;
+    for (int64_t i = 0; i < d->count; i++)
+        if (!d_put(self, d->keys[i], d->values[i])) { collection_error("addEntriesFromDictionary:"); return; }
+}
+
+static void *o_copy(void *self, const char *sel)
+{
+    int mutable = !strcmp(sel, "mutableCopy") || !strcmp(sel, "mutableCopyWithZone:");
+    if (fo_is_array(self))
+        return a_with_array(chm_foundation_lookup_class(mutable ? "NSMutableArray" : "NSArray"), sel, self);
+    if (fo_is_dict(self))
+        return d_with_dictionary(chm_foundation_lookup_class(mutable ? "NSMutableDictionary" : "NSDictionary"), sel, self);
+    if (fo_is_string(self) || fo_is_cfstring(self)) {
+        fo_string *s = fo_string_new(fo_bytes(self));
+        if (s && mutable) s->isa = chm_foundation_lookup_class("NSMutableString");
+        return s;
+    }
+    return self;
+}
+
+static unsigned long collection_enumerate(void *self, const char *sel, fo_enum_state *state, void **buffer, unsigned long count)
+{
+    (void)sel;
+    if (!state || !buffer || !count) return 0;
+    void **items;
+    unsigned long total;
+    if (fo_is_array(self)) {
+        fo_array *a = self;
+        items = a->items; total = (unsigned long)a->count; state->mutations = &a->mutations;
+    } else if (fo_is_dict(self)) {
+        fo_dict *d = self;
+        items = d->keys; total = (unsigned long)d->count; state->mutations = &d->mutations;
+    } else return 0;
+    if (state->state >= total) return 0;
+    unsigned long n = total - state->state;
+    if (n > count) n = count;
+    memcpy(buffer, items + state->state, n * sizeof(void *));
+    state->items = buffer;
+    state->state += n;
+    return n;
 }
 
 static int f_exists(void *self, const char *sel, void *path)
@@ -1769,8 +2121,8 @@ static const struct {
     { "self", (void *)o_self },
     { "init", (void *)o_self },
     { "retain", (void *)o_retain },
-    { "copy", (void *)o_retain },
-    { "mutableCopy", (void *)o_retain },
+    { "copy", (void *)o_copy },
+    { "mutableCopy", (void *)o_copy },
     { "autorelease", (void *)o_retain },
     { "release", (void *)o_release },
     { "dealloc", (void *)o_release },
@@ -1816,13 +2168,45 @@ static const struct {
     { "localizedStringWithFormat:", (void *)chm_ns_format_entry },
     { "initWithFormat:", (void *)chm_ns_format_entry },
     { "stringByAppendingFormat:", (void *)chm_ns_append_format_entry },
+    { "numberWithBool:", (void *)n_bool },
+    { "numberWithInt:", (void *)n_int },
+    { "numberWithUnsignedInt:", (void *)n_uint },
+    { "numberWithInteger:", (void *)n_signed },
+    { "numberWithLong:", (void *)n_signed },
+    { "numberWithLongLong:", (void *)n_signed },
+    { "numberWithUnsignedInteger:", (void *)n_unsigned },
+    { "numberWithUnsignedLong:", (void *)n_unsigned },
+    { "numberWithUnsignedLongLong:", (void *)n_unsigned },
+    { "numberWithFloat:", (void *)n_float },
+    { "numberWithDouble:", (void *)n_double },
     { "integerValue", (void *)o_integer },
     { "intValue", (void *)o_integer },
+    { "longValue", (void *)o_integer },
     { "longLongValue", (void *)o_integer },
-    { "unsignedIntegerValue", (void *)o_integer },
-    { "floatValue", (void *)o_double },
+    { "unsignedIntValue", (void *)o_unsigned },
+    { "unsignedLongValue", (void *)o_unsigned },
+    { "unsignedLongLongValue", (void *)o_unsigned },
+    { "unsignedIntegerValue", (void *)o_unsigned },
+    { "floatValue", (void *)o_float },
     { "doubleValue", (void *)o_double },
     { "boolValue", (void *)o_bool },
+    { "array", (void *)collection_empty },
+    { "dictionary", (void *)collection_empty },
+    { "arrayWithCapacity:", (void *)collection_with_capacity },
+    { "dictionaryWithCapacity:", (void *)collection_with_capacity },
+    { "initWithCapacity:", (void *)collection_capacity },
+    { "arrayWithObjects:count:", (void *)a_with_objects },
+    { "initWithObjects:count:", (void *)a_init_objects },
+    { "arrayWithObject:", (void *)a_with_object },
+    { "arrayWithArray:", (void *)a_with_array },
+    { "dictionaryWithObjects:forKeys:count:", (void *)d_with_objects },
+    { "initWithObjects:forKeys:count:", (void *)d_init_objects },
+    { "dictionaryWithObject:forKey:", (void *)d_with_object },
+    { "dictionaryWithDictionary:", (void *)d_with_dictionary },
+    { "addEntriesFromDictionary:", (void *)d_add_entries },
+    { "setObject:forKeyedSubscript:", (void *)d_set_subscript },
+    { "removeObjectForKey:", (void *)d_remove },
+    { "countByEnumeratingWithState:objects:count:", (void *)collection_enumerate },
     { "objectAtIndex:", (void *)a_object_at },
     { "objectAtIndexedSubscript:", (void *)a_object_at },
     { "firstObject", (void *)a_first },

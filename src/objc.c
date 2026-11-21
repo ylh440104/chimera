@@ -48,6 +48,10 @@ typedef struct {
 
 extern void chm_objc_msgSend_trampoline(void);
 extern void chm_objc_msgSendSuper2_trampoline(void);
+static void *alloc_impl(void *cls);
+static void *alloc_method(void *cls, const char *sel);
+static void *new_method(void *cls, const char *sel);
+static void *class_method(void *self, const char *sel);
 
 static chm_session *g_active_session;
 static uint8_t g_empty_cache[64];
@@ -213,7 +217,14 @@ void *chm_objc_resolve_imp(void *self, const char *sel)
         c = (chm_objc_class *)c->superclass;
         depth++;
     }
-    fallback = lookup_registered(g_active_session, sel);
+    if (!strcmp(sel, "alloc") || !strcmp(sel, "allocWithZone:"))
+        fallback = (void *)alloc_method;
+    else if (!strcmp(sel, "new"))
+        fallback = (void *)new_method;
+    else if (!strcmp(sel, "class"))
+        fallback = (void *)class_method;
+    else
+        fallback = lookup_registered(g_active_session, sel);
     if (!fallback)
         fallback = chm_foundation_lookup_method(NULL, sel);
     trace_msg(origin, sel, fallback);
@@ -366,14 +377,26 @@ static void *sel_register_impl(const char *name)
     return (void *)name;
 }
 
+const char *chm_objc_class_name(void *cls)
+{
+    return cls ? class_name(cls) : NULL;
+}
+
+void *chm_objc_get_class(const char *name)
+{
+    void *cls = chm_objc_session_get_class(g_active_session, name);
+    return cls ? cls : chm_foundation_lookup_class(name);
+}
+
 static void *get_class_impl(const char *name)
 {
-    return chm_objc_session_get_class(g_active_session, name);
+    return chm_objc_get_class(name);
 }
 
 static void *get_metaclass_impl(const char *name)
 {
-    return chm_objc_session_get_metaclass(g_active_session, name);
+    void *cls = chm_objc_session_get_metaclass(g_active_session, name);
+    return cls ? cls : chm_foundation_lookup_metaclass(name);
 }
 
 static void *object_get_class_impl(void *obj)
@@ -381,17 +404,50 @@ static void *object_get_class_impl(void *obj)
     return obj ? *(void **)obj : NULL;
 }
 
+static int class_receiver(void *obj)
+{
+    if (!obj) return 0;
+    if (chm_foundation_class_ro(obj)) return 1;
+    if (g_active_session)
+        for (int i = 0; i < g_active_session->class_count; ++i)
+            if (g_active_session->classes[i].cls == obj || g_active_session->classes[i].meta == obj)
+                return 1;
+    return 0;
+}
+
+static void *class_method(void *self, const char *sel)
+{
+    (void)sel;
+    return class_receiver(self) ? self : object_get_class_impl(self);
+}
+
 static void *alloc_impl(void *cls)
 {
-    size_t sz = class_size((chm_objc_class *)cls);
-    void *obj;
-
-    if (sz < 16)
-        sz = 16;
-    obj = calloc(1, sz);
-    if (obj)
-        *(void **)obj = cls;
+    if (!cls) return NULL;
+    if (chm_foundation_class_ro(cls)) return chm_foundation_alloc_class(cls, 0);
+    size_t sz = class_size(cls);
+    if (sz < 16) sz = 16;
+    void *obj = calloc(1, sz);
+    if (obj) *(void **)obj = cls;
     return obj;
+}
+
+static void *alloc_method(void *cls, const char *sel)
+{
+    (void)sel;
+    return class_receiver(cls) ? alloc_impl(cls) : NULL;
+}
+
+static void *alloc_init_impl(void *cls)
+{
+    void *obj = alloc_impl(cls);
+    return obj ? chm_objc_send0(obj, "init") : NULL;
+}
+
+static void *new_method(void *cls, const char *sel)
+{
+    (void)sel;
+    return class_receiver(cls) ? alloc_init_impl(cls) : NULL;
 }
 
 static void *alloc_zone_impl(void *cls, void *zone)
@@ -548,9 +604,9 @@ void *chm_objc_session_lookup(chm_session *s, const char *name)
         { "_objc_sel_registerName", (void *)sel_register_impl },
         { "_sel_registerName", (void *)sel_register_impl },
         { "_objc_alloc", (void *)alloc_impl },
-        { "_objc_alloc_init", (void *)alloc_impl },
+        { "_objc_alloc_init", (void *)alloc_init_impl },
         { "_objc_allocWithZone", (void *)alloc_zone_impl },
-        { "_objc_opt_new", (void *)alloc_impl },
+        { "_objc_opt_new", (void *)alloc_init_impl },
         { "_objc_retain", (void *)retain_impl },
         { "_objc_release", (void *)release_impl },
         { "_objc_autorelease", (void *)retain_impl },

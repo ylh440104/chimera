@@ -96,6 +96,8 @@ void *chm_objc_msgSendSuper2_bridge(void);
 void *chm_objc_resolve_imp(void *self, const char *sel);
 void *chm_objc_resolve_super2_imp(void *super_ptr, const char *sel);
 void chm_objc_dump_trace(chm_session *s);
+const char *chm_objc_class_name(void *cls);
+void *chm_objc_get_class(const char *name);
 
 void chm_dispatch_init(void);
 void *chm_dispatch_lookup(const char *name);
@@ -108,6 +110,8 @@ int chm_foundation_class_count(void);
 void *chm_foundation_lookup_class(const char *name);
 void *chm_foundation_lookup_metaclass(const char *name);
 void *chm_foundation_class_ro(void *cls);
+void *chm_foundation_alloc_class(void *cls, size_t min);
+const char *chm_foundation_cstr(void *obj);
 void *chm_foundation_lookup_method(const char *cls_name, const char *sel);
 void chm_foundation_note_missing_selector(const char *cls_name, const char *sel);
 void chm_foundation_set_root(const char *root);

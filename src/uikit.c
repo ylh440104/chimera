@@ -701,8 +701,7 @@ int chm_ui_main(int argc, char **argv, void *principal, void *delegate_name)
         g_running = 1;
         chm_session_log(g_sess, "ui: launched key_window=%s views=%d",
                         g_key_window ? "yes" : "no", chm_ui_view_count());
-        chm_objc_send2(delegate, "applicationDidBecomeActive:", app, NULL);
-        chm_objc_send2(delegate, "applicationWillResignActive:", app, NULL);
+        chm_objc_send1(delegate, "applicationDidBecomeActive:", app);
     } else {
         chm_session_log(g_sess, "ui: no delegate instance");
     }
@@ -903,6 +902,10 @@ void chm_ui_init(chm_session *s)
     if (!s)
         return;
     g_sess = s;
+    g_app = NULL;
+    g_screen = NULL;
+    g_key_window = NULL;
+    g_running = 0;
     for (i = 0; g_ui_methods[i].sel; i++) {
         chm_method_reg m;
 

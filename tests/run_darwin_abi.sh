@@ -4,7 +4,7 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 runner=${1:?usage: run_darwin_abi.sh /path/to/chimera_run}
 tmp=$(mktemp -d)
 trap 'rm -rf -- "$tmp"' EXIT
-for name in darwin_format darwin_dispatch; do
+for name in darwin_format darwin_dispatch darwin_foundation; do
     "${CLANG:-clang-18}" -target arm64-apple-ios15.0 -O2 -fno-objc-arc -fno-builtin -fno-stack-protector -c "$root/tests/$name.m" -o "$tmp/$name.o"
     "${LD64:-ld64.lld-18}" -arch arm64 -platform_version ios 15.0 15.0 -e _main -fixup_chains -undefined dynamic_lookup -o "$tmp/$name" "$tmp/$name.o"
     mkdir "$tmp/$name.root"

@@ -405,23 +405,9 @@ typedef struct {
     void *addr;
 } fw_entry;
 
-typedef struct {
-    void *isa;
-    const char *bytes;
-    int64_t length;
-} fw_string;
-
-static fw_string g_strings[80];
-static int g_string_used;
-
 static void *string_const(const char *text)
 {
-    if (g_string_used >= 80)
-        return &g_strings[0];
-    g_strings[g_string_used].isa = NULL;
-    g_strings[g_string_used].bytes = text;
-    g_strings[g_string_used].length = (int64_t)strlen(text);
-    return &g_strings[g_string_used++];
+    return chm_foundation_string(text);
 }
 
 static void *NSLog_impl(const char *fmt, ...)
@@ -460,8 +446,8 @@ static void *NSTemporaryDirectory_impl(void)
 
 static void *NSStringFromClass_impl(void *cls)
 {
-    (void)cls;
-    return string_const("Class");
+    const char *name = chm_objc_class_name(cls);
+    return name ? string_const(name) : NULL;
 }
 
 static void *NSStringFromSelector_impl(const char *sel)
@@ -469,16 +455,16 @@ static void *NSStringFromSelector_impl(const char *sel)
     return string_const(sel ? sel : "");
 }
 
-static void *NSClassFromString_impl(const char *name)
+static void *NSClassFromString_impl(void *name)
 {
-    extern void *chm_foundation_lookup_class(const char *);
-
-    return name ? chm_foundation_lookup_class(name) : NULL;
+    return name ? chm_objc_get_class(chm_foundation_cstr(name)) : NULL;
 }
 
-static void *NSSelectorFromString_impl(const char *name)
+static void *NSSelectorFromString_impl(void *name)
 {
-    return (void *)name;
+    if (!name) return NULL;
+    void *(*register_name)(const char *) = chm_objc_session_lookup(NULL, "_sel_registerName");
+    return register_name ? register_name(chm_foundation_cstr(name)) : NULL;
 }
 
 static void *NSStringFromUIEdgeInsets_impl(void)
