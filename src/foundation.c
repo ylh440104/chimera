@@ -514,16 +514,15 @@ static int fo_is_cfstring(void *p)
            chm_foundation_isa_is(p, "NSMutableString");
 }
 
+#include "foundation_strings.inc"
+
 static const char *fo_bytes(void *p)
 {
     if (fo_is_string(p)) {
         const char *bytes = ((fo_string *)p)->bytes;
         return bytes ? bytes : "";
     }
-    if (fo_is_cfstring(p)) {
-        const char *s = *(const char *const *)((const uint8_t *)p + 16);
-        if (s) return s;
-    }
+    if (fo_is_cfstring(p)) return constant_utf8(p);
     return "";
 }
 
@@ -1539,6 +1538,8 @@ static void *make_error(const char *domain, long code, const char *desc)
     d->keys[d->count] = fo_string_new("NSLocalizedDescription");
     d->values[d->count] = fo_string_new(desc ? desc : "error");
     d->count++;
+    d_put(d, fo_string_new("domain"), fo_string_new(domain ? domain : "NSCocoaErrorDomain"));
+    d_put(d, fo_string_new("code"), n_signed(NULL, NULL, code));
     return d;
 }
 
@@ -2191,7 +2192,7 @@ static const struct {
     { "dictionaryWithDictionary:", (void *)d_with_dictionary },
     { "addEntriesFromDictionary:", (void *)d_add_entries },
     { "setObject:forKeyedSubscript:", (void *)d_set_subscript },
-    { "removeObjectForKey:", (void *)d_remove },
+    { "removeObjectForKey:", (void *)defaults_remove },
     { "countByEnumeratingWithState:objects:count:", (void *)collection_enumerate },
     { "objectAtIndex:", (void *)a_object_at },
     { "objectAtIndexedSubscript:", (void *)a_object_at },
@@ -2204,9 +2205,9 @@ static const struct {
     { "valueForKeyPath:", (void *)d_value_path },
     { "setValue:forKey:", (void *)d_set_subscript },
     { "setValue:forKeyPath:", (void *)d_set_value_path },
-    { "objectForKey:", (void *)d_value },
+    { "objectForKey:", (void *)defaults_get },
     { "objectForKeyedSubscript:", (void *)d_value },
-    { "setObject:forKey:", (void *)d_set },
+    { "setObject:forKey:", (void *)defaults_set },
     { "allKeys", (void *)d_keys },
     { "allValues", (void *)d_values },
     { "fileExistsAtPath:", (void *)f_exists },

@@ -183,8 +183,13 @@ class MainActivity : AppCompatActivity() {
                     val exe = File(app, exeName)
                     check(exe.isFile && exe.canonicalPath.startsWith(app.canonicalPath + File.separator)) { "可执行文件无效" }
                     log("bundle ${app.name} exe $exeName")
-                    val sandbox = File(filesDir, "sandbox")
+                    val plist = File(app, "Info.plist")
+                    val bundleId = readPlistString(plist, "CFBundleIdentifier") ?: error("缺少 CFBundleIdentifier")
+                    val digest = java.security.MessageDigest.getInstance("SHA-256").digest(bundleId.toByteArray(Charsets.UTF_8))
+                    val directory = digest.joinToString("") { "%02x".format(it.toInt() and 255) }
+                    val sandbox = File(File(filesDir, "applications"), directory)
                     check(sandbox.isDirectory || sandbox.mkdirs()) { "应用数据目录创建失败" }
+                    File(sandbox.parentFile, "$directory.bundle-id").writeText(bundleId)
                     log(Native.load(exe.absolutePath, sandbox.absolutePath))
                     loaded = Native.ready()
                     log(if (loaded) "已装载，可以点运行" else "装载失败，运行已禁用")
@@ -381,11 +386,24 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
-    private fun readExecutable(plist: File): String? {
+    private fun readExecutable(plist: File): String? = readPlistString(plist, "CFBundleExecutable")
+
+    private fun readPlistString(plist: File, key: String): String? {
         if (!plist.isFile || plist.length() > 2 * 1024 * 1024) return null
-        val text = plist.readText()
-        return Regex("<key>CFBundleExecutable</key>\\s*<string>([^<]+)</string>")
-            .find(text)?.groupValues?.get(1)
+        val parser = android.util.Xml.newPullParser()
+        plist.reader().use { reader ->
+            parser.setInput(reader)
+            var matched = false
+            while (parser.eventType != org.xmlpull.v1.XmlPullParser.END_DOCUMENT) {
+                if (parser.eventType == org.xmlpull.v1.XmlPullParser.START_TAG) {
+                    if (parser.name == "key") matched = parser.nextText() == key
+                    else if (matched && parser.name == "string") return parser.nextText()
+                    else if (matched) matched = false
+                }
+                parser.next()
+            }
+        }
+        return null
     }
 
     companion object {

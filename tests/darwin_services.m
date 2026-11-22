@@ -31,6 +31,17 @@ __attribute__((objc_root_class))
 - (id)objectForKeyedSubscript:(id)key;
 - (BOOL)writeToFile:(id)path atomically:(BOOL)atomic;
 @end
+@interface NSUserDefaults : NSObject
++ (id)standardUserDefaults;
+- (void)setObject:(id)object forKey:(id)key;
+- (id)objectForKey:(id)key;
+- (void)setBool:(BOOL)value forKey:(id)key;
+- (BOOL)boolForKey:(id)key;
+- (BOOL)synchronize;
+@end
+@interface NSMutableArray : NSArray
+- (void)addObjectsFromArray:(id)array;
+@end
 @interface NSData : NSObject
 + (id)dataWithContentsOfFile:(id)path;
 @end
@@ -174,7 +185,11 @@ int main(void)
     NSDictionary *dict = @{@"value":@7, @"enabled":[NSNumber numberWithBool:1], @"unicode":@"中文 😀", @"array":@[@"z",@"a"]};
     NSData *data = [NSJSONSerialization dataWithJSONObject:dict options:0 error:&error];
     id parsed = [NSJSONSerialization JSONObjectWithData:data options:0 error:&error];
-    if (!parsed || error || strcmp([parsed[@"unicode"] UTF8String], "中文 😀") || ![parsed[@"enabled"] boolValue]) return 212;
+    if (!data) return 224;
+    if (!parsed) return 225;
+    if (error) return 226;
+    if (strcmp([parsed[@"unicode"] UTF8String], "中文 😀")) return 227;
+    if (![parsed[@"enabled"] boolValue]) return 228;
     if ([NSJSONSerialization JSONObjectWithData:[@"{\"x\":1,}" dataUsingEncoding:4] options:0 error:&error] || !error) return 213;
     NSOutputStream *stream = [[NSOutputStream alloc] initToFileAtPath:@"account.json" append:0];
     [stream open];
@@ -189,6 +204,16 @@ int main(void)
     if ([files count] != 2 || strcmp([[files firstObject] UTF8String], "account.json")) return 218;
     BOOL isdir = 1;
     if (![fm fileExistsAtPath:@"account.json" isDirectory:&isdir] || isdir) return 219;
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    [defaults setObject:@"stored" forKey:@"test"];
+    [defaults setBool:1 forKey:@"flag"];
+    if (![defaults synchronize] || ![defaults boolForKey:@"flag"] || strcmp([[defaults objectForKey:@"test"] UTF8String], "stored")) return 229;
+    id preferences = [NSDictionary dictionaryWithContentsOfFile:@"/Library/Preferences/preferences.plist"];
+    if (!preferences || strcmp([preferences[@"test"] UTF8String], "stored")) return 230;
+    NSMutableArray *merged = [NSMutableArray new];
+    [merged addObjectsFromArray:@[@"a", @"b"]];
+    [merged addObjectsFromArray:merged];
+    if ([merged count] != 4 || strcmp([merged[2] UTF8String], "a")) return 231;
     sender = [NSObject new];
     ServiceObserver *observer = [ServiceObserver new];
     [[NSNotificationCenter defaultCenter] addObserver:observer selector:@selector(receive:) name:@"Updated" object:sender];

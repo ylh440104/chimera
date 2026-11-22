@@ -1,6 +1,7 @@
 #include "foundation_json.inc"
 #include "foundation_plist.inc"
 #include "foundation_network.inc"
+#include "foundation_defaults.inc"
 
 static long string_compare(void *self, const char *sel, void *other)
 {
@@ -236,8 +237,10 @@ static void *null_object(void) { return singleton("__null", "NSNull"); }
 static void services_shutdown(void)
 {
     network_shutdown();
+    constant_strings_reset();
     while (streams) { output_stream *next = streams->next; if (streams->fd >= 0) close(streams->fd); free(streams); streams = next; }
     while (observers) { observer *next = observers->next; free(observers->selector); free(observers); observers = next; }
     while (notifications) { notification *next = notifications->next; free(notifications); notifications = next; }
     observer_serial = 0; g_bundle_root[0] = 0;
+    default_values = NULL; registered_defaults = NULL;
 }
