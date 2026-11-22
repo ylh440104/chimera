@@ -2087,9 +2087,11 @@ static void *os_version(void)
     return fo_string_new("16.0");
 }
 
-static void *bundle_id(void)
+static void *bundle_metadata(void *object);
+static void *bundle_id(void *self, const char *sel)
 {
-    return d_value(chm_foundation_bundle_info(), NULL, fo_string_new("CFBundleIdentifier"));
+    (void)sel;
+    return d_value(bundle_metadata(self), NULL, fo_string_new("CFBundleIdentifier"));
 }
 
 #include "foundation_services.inc"

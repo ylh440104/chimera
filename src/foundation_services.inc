@@ -2,6 +2,7 @@
 #include "foundation_plist.inc"
 #include "foundation_network.inc"
 #include "foundation_defaults.inc"
+#include "foundation_bundle.inc"
 
 static long string_compare(void *self, const char *sel, void *other)
 {
@@ -184,15 +185,15 @@ void chm_foundation_set_bundle(const char *root)
 }
 void *chm_foundation_bundle_info(void)
 {
-    char path[2048];
-    int n = snprintf(path, sizeof(path), "%s/Info.plist", g_bundle_root);
-    if (n < 0 || (size_t)n >= sizeof(path)) return NULL;
-    void *info = plist_read_data(read_whole_file(path));
-    return fo_is_dict(info) ? info : NULL;
+    return bundle_metadata(NULL);
+}
+static void *bundle_information(void *self, const char *sel)
+{
+    (void)sel; return bundle_metadata(self);
 }
 static void *bundle_info_value(void *self, const char *sel, void *key)
 {
-    (void)self; (void)sel; return d_value(chm_foundation_bundle_info(), NULL, key);
+    (void)sel; return d_value(bundle_metadata(self), NULL, key);
 }
 static long string_compare_insensitive(void *self, const char *sel, void *other)
 {
@@ -206,12 +207,12 @@ static int data_write_options(void *self, const char *sel, void *path, unsigned 
     if (!ok && error) *error = make_error("NSCocoaErrorDomain", errno, "Cannot write data");
     return ok;
 }
-static void *bundle_path(void *self, const char *sel) { (void)self; (void)sel; return fo_string_new(g_bundle_root); }
+static void *bundle_path(void *self, const char *sel) { (void)sel; return fo_string_new(bundle_directory(self)); }
 static void *bundle_resource(void *self, const char *sel, void *name, void *extension)
 {
     (void)self; (void)sel;
     char path[2048], mapped[2048]; struct stat st;
-    int n = snprintf(path, sizeof(path), "%s/%s%s%s", g_bundle_root, fo_bytes(name), *fo_bytes(extension) ? "." : "", fo_bytes(extension));
+    int n = snprintf(path, sizeof(path), "%s/%s%s%s", bundle_directory(self), fo_bytes(name), *fo_bytes(extension) ? "." : "", fo_bytes(extension));
     if (n < 0 || (size_t)n >= sizeof(path) || !chm_foundation_map_path(path, mapped, sizeof(mapped)) || stat(mapped, &st)) return NULL;
     return fo_string_new(mapped);
 }
@@ -227,7 +228,7 @@ static void *bundle_localized(void *self, const char *sel, void *key, void *valu
     char path[2048];
     const char *folders[] = {"en.lproj", "Base.lproj", ""};
     for (size_t i = 0; i < 3; i++) {
-        int n = snprintf(path, sizeof(path), "%s/%s/%s.strings", g_bundle_root, folders[i], filename);
+        int n = snprintf(path, sizeof(path), "%s/%s/%s.strings", bundle_directory(self), folders[i], filename);
         if (n < 0 || (size_t)n >= sizeof(path)) continue;
         fo_data *data = read_whole_file(path); if (!data || !data->length) continue;
         void *dict = plist_read_data(data);
@@ -262,6 +263,7 @@ static void services_shutdown(void)
 {
     network_shutdown();
     constant_strings_reset();
+    bundles_reset();
     while (streams) { output_stream *next = streams->next; if (streams->fd >= 0) close(streams->fd); free(streams); streams = next; }
     while (observers) { observer *next = observers->next; free(observers->selector); free(observers); observers = next; }
     while (notifications) { notification *next = notifications->next; free(notifications); notifications = next; }

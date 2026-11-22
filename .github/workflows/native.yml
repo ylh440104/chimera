@@ -90,6 +90,8 @@ jobs:
           ld64.lld-18 -arch arm64 -platform_version ios 15.0 15.0 -e _main -fixup_chains -exported_symbol _services_check -undefined dynamic_lookup -o abi-results/darwin_services abi-results/darwin_services.o
           mkdir -p abi-results/services-root
           cp tests/services-info.plist abi-results/Info.plist
+          mkdir -p abi-results/en.lproj
+          cp tests/Localizable.strings abi-results/en.lproj/Localizable.strings
           CHM_SANDBOX_ROOT="$PWD/abi-results/services-root" timeout 30 ./test_services "$PWD/abi-results/darwin_services" > abi-results/services.log 2>&1 || { cat abi-results/services.log; exit 1; }
           cat abi-results/services.log
 
@@ -110,6 +112,7 @@ jobs:
             abi-results/darwin_table
             abi-results/darwin_services
             abi-results/Info.plist
+            abi-results/en.lproj
             abi-results/services.log
           if-no-files-found: error
 

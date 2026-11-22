@@ -41,6 +41,8 @@ __attribute__((objc_root_class))
 @end
 @interface NSMutableArray : NSArray
 - (void)addObjectsFromArray:(id)array;
+- (void)insertObject:(id)object atIndex:(NSUInteger)index;
+- (void)removeObjectAtIndex:(NSUInteger)index;
 @end
 @interface NSData : NSObject
 + (id)dataWithContentsOfFile:(id)path;
@@ -48,6 +50,10 @@ __attribute__((objc_root_class))
 @end
 @interface NSBundle : NSObject
 + (id)mainBundle;
++ (id)bundleWithPath:(id)path;
++ (id)bundleWithIdentifier:(id)identifier;
+- (id)pathForResource:(id)name ofType:(id)extension;
+- (id)localizedStringForKey:(id)key value:(id)value table:(id)table;
 - (id)infoDictionary;
 - (id)bundleIdentifier;
 - (id)objectForInfoDictionaryKey:(id)key;
@@ -190,6 +196,9 @@ int main(void)
     if (strcmp([[bundle bundleIdentifier] UTF8String], "dev.chimera.services-fixture")) return 232;
     if (strcmp([[[bundle infoDictionary] objectForKeyedSubscript:@"CFBundleExecutable"] UTF8String], "darwin_services")) return 233;
     if (strcmp([[bundle objectForInfoDictionaryKey:@"CFBundleDisplayName"] UTF8String], "Independent & Generic")) return 234;
+    NSBundle *localized = [NSBundle bundleWithPath:[bundle pathForResource:@"en" ofType:@"lproj"]];
+    if (!localized || strcmp([[localized localizedStringForKey:@"fixture.key" value:@"fallback" table:(id)0] UTF8String], "Resource value")) return 238;
+    if ([NSBundle bundleWithIdentifier:@"dev.chimera.services-fixture"] != bundle) return 239;
     NSFileManager *fm = [NSFileManager defaultManager];
     if (![fm createDirectoryAtPath:@"/var/mobile/Documents/services" withIntermediateDirectories:1 attributes:(id)0 error:&error] || error) return 210;
     if (![fm changeCurrentDirectoryPath:@"/var/mobile/Documents/services"]) return 211;
@@ -228,6 +237,9 @@ int main(void)
     [merged addObjectsFromArray:@[@"a", @"b"]];
     [merged addObjectsFromArray:merged];
     if ([merged count] != 4 || strcmp([merged[2] UTF8String], "a")) return 231;
+    [merged insertObject:@"front" atIndex:0];
+    [merged removeObjectAtIndex:2];
+    if ([merged count] != 4 || strcmp([merged[0] UTF8String], "front") || strcmp([merged[2] UTF8String], "a")) return 237;
     sender = [NSObject new];
     ServiceObserver *observer = [ServiceObserver new];
     [[NSNotificationCenter defaultCenter] addObserver:observer selector:@selector(receive:) name:@"Updated" object:sender];
