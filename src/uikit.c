@@ -56,7 +56,17 @@ typedef struct ui_view {
     int switch_on;
     struct ui_table *table;
     struct ui_cell *cell;
+    void *alert_action;
+    char *placeholder;
+    int secure, keyboard_type, capitalization;
+    int animating;
 } ui_view;
+
+static ui_view *focused_field;
+static void dialogs_prepare(void);
+static void dialogs_shutdown(void);
+static int dialog_select(void *action);
+static int send_control_events(ui_view *view, uint64_t events);
 
 typedef struct ui_index {
     void *object;
@@ -134,6 +144,8 @@ typedef struct ui_item {
     void *left_item;
     void *target;
     const char *action;
+    void *handler, *owner, *button;
+    long style;
     int disabled;
     uint32_t background;
     struct ui_item *next;
@@ -890,7 +902,7 @@ static void nav_hide_bar(void *self, const char *sel, signed char hidden, signed
 static int is_bar_item(void *obj)
 {
     return chm_objc_is_kind(obj, "UITabBarItem") || chm_objc_is_kind(obj, "UINavigationItem") ||
-           chm_objc_is_kind(obj, "UIBarButtonItem");
+           chm_objc_is_kind(obj, "UIBarButtonItem") || chm_objc_is_kind(obj, "UIAlertAction");
 }
 
 static void wc_set_title(void *self, const char *sel, void *title)
@@ -1027,6 +1039,7 @@ static void wc_dismiss(void *self, const char *sel, int animated, void *done)
     ui_vc *scan = g_modal;
     while (scan && scan != wanted) scan = scan->previous_modal;
     if (!scan) return;
+    focused_field = NULL;
     for (;;) {
         ui_vc *top = g_modal;
         controller_appearance(top, 0, animated);
@@ -1398,6 +1411,7 @@ int chm_ui_view_count(void)
 }
 
 #include "ui_widgets.inc"
+#include "ui_dialog.inc"
 #include "ui_input.inc"
 
 static const struct {
@@ -1406,6 +1420,7 @@ static const struct {
 } g_ui_methods[] = {
 #include "ui_widget_methods.inc"
 #include "ui_input_methods.inc"
+#include "ui_dialog_methods.inc"
     { "initWithRootViewController:", (void *)nav_init_root },
     { "viewControllers", (void *)container_children },
     { "childViewControllers", (void *)container_children },
@@ -1507,6 +1522,7 @@ void chm_ui_shutdown(chm_session *s)
     if (!s || s != g_sess) return;
     input_reset();
     g_modal = NULL;
+    dialogs_shutdown();
     tables_shutdown();
     while (views) {
         ui_view *next = views->next;
@@ -1518,6 +1534,7 @@ void chm_ui_shutdown(chm_session *s)
             views->actions = next_action;
         }
         free(views->text);
+        free(views->placeholder);
         free(views);
         views = next;
     }

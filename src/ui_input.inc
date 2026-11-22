@@ -323,6 +323,7 @@ static int pointer_body(void *context)
     container_layout(as_vc(g_key_window ? g_key_window->owner : NULL));
     if (g_modal) container_layout(g_modal);
     tables_prepare(g_key_window);
+    dialogs_prepare();
     layout_dirty = 1; ui_layout();
     ui_hit hit = hit_at(p->x, p->y);
     if (p->phase == 0) {
@@ -350,6 +351,8 @@ static int pointer_body(void *context)
     }
     if (hit.kind == 4) return nav_pop(hit.controller->object, NULL, 0) != NULL;
     if (hit.kind == 5) {
+        if (hit.view->alert_action) return dialog_select(hit.view->alert_action);
+        if (chm_objc_is_kind(hit.view->object, "UITextField")) return field_focus(hit.view->object, "becomeFirstResponder");
         if (chm_objc_is_kind(hit.view->object, "UISwitch")) {
             hit.view->switch_on = !hit.view->switch_on;
             send_control_events(hit.view, 1u << 12);

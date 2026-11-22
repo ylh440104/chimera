@@ -61,6 +61,7 @@ jobs:
           done
           cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -Iinclude -Ithird_party/yxml -o test_input tests/test_input.c $SRC -lm -ldl
           cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -Iinclude -Ithird_party/yxml -o test_table tests/test_table.c $SRC -lm -ldl
+          cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -Iinclude -Ithird_party/yxml -o test_services tests/test_services.c $SRC -lm -ldl
           ./chmdump tests/fixture.ios > dump.txt
           head -3 dump.txt
           rc=0
@@ -85,6 +86,11 @@ jobs:
           mkdir -p abi-results/table-root
           CHM_SANDBOX_ROOT="$PWD/abi-results/table-root" timeout 30 ./test_table "$PWD/abi-results/darwin_table" > abi-results/table.log 2>&1 || { cat abi-results/table.log; exit 1; }
           cat abi-results/table.log
+          clang-18 -target arm64-apple-ios15.0 -O2 -fblocks -fno-objc-arc -fno-builtin -fno-stack-protector -c tests/darwin_services.m -o abi-results/darwin_services.o
+          ld64.lld-18 -arch arm64 -platform_version ios 15.0 15.0 -e _main -fixup_chains -exported_symbol _services_check -undefined dynamic_lookup -o abi-results/darwin_services abi-results/darwin_services.o
+          mkdir -p abi-results/services-root
+          CHM_SANDBOX_ROOT="$PWD/abi-results/services-root" timeout 30 ./test_services "$PWD/abi-results/darwin_services" > abi-results/services.log 2>&1 || { cat abi-results/services.log; exit 1; }
+          cat abi-results/services.log
 
       - uses: actions/upload-artifact@v4
         with:
@@ -101,6 +107,8 @@ jobs:
             abi-results/darwin_input
             abi-results/table.log
             abi-results/darwin_table
+            abi-results/darwin_services
+            abi-results/services.log
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
@@ -115,4 +123,5 @@ jobs:
             test_format
             test_input
             test_table
+            test_services
           if-no-files-found: error

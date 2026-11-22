@@ -313,12 +313,16 @@ static void objc_setAssociatedObject_impl(void *obj, const void *key, void *valu
     (void)policy;
 }
 
-static void objc_setProperty_impl(void *self, const char *sel, void **slot, void *value)
+static void objc_setProperty_impl(void *self, const char *sel, void *value, long offset)
 {
-    (void)self;
     (void)sel;
-    if (slot)
-        *slot = value;
+    if (self && offset >= 0) *(void **)((char *)self + offset) = value;
+}
+
+static void objc_setProperty_copy_impl(void *self, const char *sel, void *value, long offset)
+{
+    void *copy = value ? chm_objc_send0(value, "copy") : NULL;
+    objc_setProperty_impl(self, sel, copy, offset);
 }
 
 static void objc_copyStruct_impl(void *dst, const void *src, long size, int atomic, int hasStrong)
@@ -562,7 +566,9 @@ static const fw_entry g_fw[] = {
     { "_objc_getAssociatedObject", (void *)objc_getAssociatedObject_impl },
     { "_objc_setAssociatedObject", (void *)objc_setAssociatedObject_impl },
     { "_objc_setProperty_atomic", (void *)objc_setProperty_impl },
-    { "_objc_setProperty_nonatomic_copy", (void *)objc_setProperty_impl },
+    { "_objc_setProperty_nonatomic", (void *)objc_setProperty_impl },
+    { "_objc_setProperty_nonatomic_copy", (void *)objc_setProperty_copy_impl },
+    { "_objc_setProperty_atomic_copy", (void *)objc_setProperty_copy_impl },
     { "_objc_copyStruct", (void *)objc_copyStruct_impl },
     { "_objc_initWeak", (void *)objc_initWeak_impl },
     { "_objc_loadWeakRetained", (void *)objc_loadWeakRetained_impl },

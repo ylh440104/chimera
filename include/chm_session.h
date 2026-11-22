@@ -40,7 +40,7 @@ typedef struct {
     int32_t image_index;
 } chm_objc_cls_entry;
 
-#define CHM_MAX_METHOD_REGS 512
+#define CHM_MAX_METHOD_REGS 1024
 
 typedef struct {
     const char *cls;
@@ -101,6 +101,10 @@ void chm_objc_dump_trace(chm_session *s);
 const char *chm_objc_class_name(void *cls);
 void *chm_objc_get_class(const char *name);
 
+void *chm_block_copy(void *object);
+void chm_block_release(void *object);
+void chm_blocks_reset(void);
+void chm_dispatch_reset(void);
 void chm_dispatch_init(void);
 void *chm_dispatch_lookup(const char *name);
 size_t chm_dispatch_pump(chm_session *s);
@@ -117,6 +121,16 @@ const char *chm_foundation_cstr(void *obj);
 void *chm_foundation_lookup_method(const char *cls_name, const char *sel);
 void chm_foundation_note_missing_selector(const char *cls_name, const char *sel);
 void chm_foundation_set_root(const char *root);
+void chm_foundation_set_bundle(const char *root);
+typedef struct {
+    uint64_t token;
+    const char *url, *method, *headers;
+    const void *body;
+    size_t body_size;
+    int timeout_ms, cancelled;
+} chm_network_request;
+int chm_network_next(chm_network_request *request);
+int chm_network_complete(uint64_t token, int status, const void *bytes, size_t length, const char *headers, const char *failure);
 int chm_foundation_map_path(const char *in, char *out, size_t cap);
 int chm_foundation_map_path_write(const char *in, char *out, size_t cap);
 int chm_foundation_isa_is(void *obj, const char *cls_name);
@@ -168,5 +182,10 @@ int chm_ui_render(uint32_t *buf, int bw, int bh);
 int chm_ui_view_count(void);
 int chm_ui_pointer(int phase, double x, double y);
 int chm_ui_scroll(double x, double y, double delta);
+uint64_t chm_ui_focused_field(void);
+const char *chm_ui_field_text(void);
+const char *chm_ui_field_placeholder(void);
+int chm_ui_field_options(void);
+int chm_ui_edit_text(uint64_t token, const char *text, int commit);
 
 #endif

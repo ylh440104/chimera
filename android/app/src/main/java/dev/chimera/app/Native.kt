@@ -35,6 +35,24 @@ class Native {
         external fun scroll(x: Double, y: Double, delta: Double): Int
 
         @JvmStatic
+        external fun focusedField(): Long
+
+        @JvmStatic
+        external fun fieldText(placeholder: Boolean): ByteArray
+
+        @JvmStatic
+        external fun fieldOptions(): Int
+
+        @JvmStatic
+        external fun editText(token: Long, text: ByteArray, commit: Boolean): Int
+
+        @JvmStatic
+        external fun nextRequest(): NetworkRequest?
+
+        @JvmStatic
+        external fun completeRequest(token: Long, status: Int, body: ByteArray, headers: String, error: String): Int
+
+        @JvmStatic
         external fun release()
     }
 }

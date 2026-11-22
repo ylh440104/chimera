@@ -293,6 +293,9 @@ void chm_session_destroy(chm_session *s)
     if (!s)
         return;
     chm_ui_shutdown(s);
+    chm_dispatch_reset();
+    chm_blocks_reset();
+    chm_foundation_shutdown();
     for (i = 0; i < s->image_count; i++)
         chm_close(&s->images[i]);
     if (s->sels) {
@@ -305,7 +308,6 @@ void chm_session_destroy(chm_session *s)
     free(s->classes);
     free(s->methods);
     free(s->log_buf);
-    chm_foundation_shutdown();
     free(s);
 }
 
@@ -351,6 +353,7 @@ int chm_session_load(chm_session *s, const char *exe_path)
 
     snprintf(s->exe_path, sizeof(s->exe_path), "%s", exe_path);
     dir_of(exe_path, s->app_dir, sizeof(s->app_dir));
+    chm_foundation_set_bundle(s->app_dir);
 
     if (chm_open(&s->images[0], exe_path)) {
         chm_session_log(s, "open main failed: %s", s->images[0].error);

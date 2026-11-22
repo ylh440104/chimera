@@ -508,28 +508,7 @@ static void autorelease_pop_impl(void *ctx)
     (void)ctx;
 }
 
-static void *block_copy_impl(void *b)
-{
-    return b;
-}
-
-static void block_release_impl(void *b)
-{
-    (void)b;
-}
-
-static void block_object_assign_impl(void *dst, void *src, int flags)
-{
-    (void)flags;
-    if (dst)
-        *(void **)dst = src;
-}
-
-static void block_object_dispose_impl(void *obj, int flags)
-{
-    (void)obj;
-    (void)flags;
-}
+#include "blocks.inc"
 
 void *chm_objc_msgSend_bridge(void)
 {
@@ -642,12 +621,14 @@ void *chm_objc_session_lookup(chm_session *s, const char *name)
         { "_objc_retainAutoreleaseReturnValue", (void *)retain_impl },
         { "_objc_unsafeClaimAutoreleasedReturnValue", (void *)retain_impl },
         { "_objc_claimAutoreleasedReturnValue", (void *)retain_impl },
-        { "_objc_retainBlock", (void *)block_copy_impl },
+        { "_objc_retainBlock", (void *)chm_block_copy },
+        { "_objc_copyWeak", (void *)copy_weak_impl },
+        { "_objc_moveWeak", (void *)move_weak_impl },
         { "_objc_storeStrong", (void *)store_strong_impl },
         { "_objc_autoreleasePoolPush", (void *)autorelease_push_impl },
         { "_objc_autoreleasePoolPop", (void *)autorelease_pop_impl },
-        { "__Block_copy", (void *)block_copy_impl },
-        { "__Block_release", (void *)block_release_impl },
+        { "__Block_copy", (void *)chm_block_copy },
+        { "__Block_release", (void *)chm_block_release },
         { "__Block_object_assign", (void *)block_object_assign_impl },
         { "__Block_object_dispose", (void *)block_object_dispose_impl },
         { "__objc_empty_cache", (void *)g_empty_cache },

@@ -224,6 +224,8 @@ JNIEXPORT jboolean JNICALL Java_dev_chimera_app_Native_paint(JNIEnv *env, jclass
     return rc == 1 && !context.failed ? JNI_TRUE : JNI_FALSE;
 }
 
+#include "chimera_services.inc"
+
 JNIEXPORT void JNICALL Java_dev_chimera_app_Native_release(JNIEnv *env, jclass cls)
 {
     (void)env;

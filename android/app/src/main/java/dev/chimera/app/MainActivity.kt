@@ -24,6 +24,33 @@ class MainActivity : AppCompatActivity() {
     private var executed = false
     private var guestLive = false
     @Volatile private var closed = false
+    @Volatile private var serviceEpoch = 0L
+    private var editorToken = 0L
+    private var editor: androidx.appcompat.app.AlertDialog? = null
+    private val eventHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val eventTick = object : Runnable {
+        override fun run() {
+            if (closed) return
+            if (!busy && guestLive && editorToken == 0L) {
+                val epoch = serviceEpoch
+                Native.executor.execute {
+                    try {
+                        if (!closed && epoch == serviceEpoch) {
+                            val count = Native.pump()
+                            check(count >= 0) { "客机异步回调异常" }
+                            if (count > 0) drawGuestFrame()
+                            else serviceOutputs()
+                        }
+                    } catch (e: Exception) {
+                        log("异步处理失败：$e")
+                        runOnUiThread { guestLive = false; buttons() }
+                    } finally {
+                        if (!closed) eventHandler.postDelayed(this, 200)
+                    }
+                }
+            } else eventHandler.postDelayed(this, 200)
+        }
+    }
 
     private val picker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri != null) importAndLoad(uri)
@@ -66,6 +93,7 @@ class MainActivity : AppCompatActivity() {
         root.addView(frameView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 2f))
         root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(root)
+        eventHandler.postDelayed(eventTick, 200)
     }
 
     private fun log(text: String) {
@@ -87,6 +115,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun importAndLoad(uri: Uri) {
         if (busy || closed) return
+        serviceEpoch++
+        editor?.dismiss()
+        editor = null
+        editorToken = 0
         busy = true
         ready = false
         executed = false
@@ -212,7 +244,77 @@ class MainActivity : AppCompatActivity() {
                 buttons()
             }
         }
+        serviceOutputs()
         return true
+    }
+
+    private fun serviceOutputs() {
+        val epoch = serviceEpoch
+        while (!closed && epoch == serviceEpoch) {
+            val request = Native.nextRequest() ?: break
+            GuestNetwork.send(request) { result ->
+                if (!closed && epoch == serviceEpoch) {
+                    try {
+                        val rc = Native.completeRequest(result.request.token, result.status, result.body, result.headers, result.error)
+                        check(rc >= 0) { "网络完成回调异常" }
+                        if (rc > 0) {
+                            check(Native.pump() >= 0)
+                            check(drawGuestFrame())
+                            File(filesDir, "last-report.txt").writeText(Native.report())
+                        }
+                    } catch (e: Exception) {
+                        log("网络回调失败：$e")
+                        runOnUiThread { guestLive = false; buttons() }
+                    }
+                }
+            }
+        }
+        val token = Native.focusedField()
+        if (token == 0L) return
+        val text = Native.fieldText(false).toString(Charsets.UTF_8)
+        val hint = Native.fieldText(true).toString(Charsets.UTF_8)
+        val options = Native.fieldOptions()
+        runOnUiThread {
+            if (!closed && epoch == serviceEpoch && editorToken == 0L) {
+                editorToken = token
+                val field = android.widget.EditText(this).apply {
+                    setSingleLine(true)
+                    inputType = when (options and 255) {
+                        4, 5 -> android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_SIGNED
+                        8 -> android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+                        7 -> android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+                        3 -> android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
+                        else -> android.text.InputType.TYPE_CLASS_TEXT
+                    }
+                    if (options and 256 != 0) {
+                        inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+                    }
+                    setText(text)
+                    this.hint = hint
+                    setSelection(length())
+                }
+                var resolved = false
+                fun finishEdit(commit: Boolean) {
+                    if (resolved) return
+                    resolved = true
+                    editorToken = 0
+                    if (!closed && epoch == serviceEpoch) interactGuest("编辑输入框") {
+                        Native.editText(token, field.text.toString().toByteArray(Charsets.UTF_8), commit)
+                    }
+                }
+                editor = androidx.appcompat.app.AlertDialog.Builder(this)
+                    .setView(field)
+                    .setPositiveButton(android.R.string.ok) { _, _ -> finishEdit(true) }
+                    .setNegativeButton(android.R.string.cancel) { _, _ -> finishEdit(false) }
+                    .setOnCancelListener { finishEdit(false) }
+                    .create()
+                editor?.setOnShowListener {
+                    field.requestFocus()
+                    editor?.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+                }
+                editor?.show()
+            }
+        }
     }
 
     private fun tapGuest(downX: Float, downY: Float, upX: Float, upY: Float) {
@@ -269,6 +371,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         closed = true
+        serviceEpoch++
+        eventHandler.removeCallbacks(eventTick)
+        editor?.dismiss()
+        editor = null
         Native.executor.execute { Native.release() }
         frameView.submitFrame(null)
         frame = null

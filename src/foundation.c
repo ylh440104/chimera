@@ -10,62 +10,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static char g_sandbox_root[512] = "/tmp/chimera";
-
-void chm_foundation_set_root(const char *root)
-{
-    if (!root)
-        return;
-    snprintf(g_sandbox_root, sizeof(g_sandbox_root), "%s", root);
-}
-
-int chm_foundation_map_path(const char *in, char *out, size_t cap)
-{
-    const char *rel = in;
-
-    if (!in || !in[0] || !out || !cap)
-        return 0;
-    if (strncmp(in, "/var/", 5) == 0) {
-        rel = in + 5;
-    } else if (strncmp(in, "/private/var/", 13) == 0) {
-        rel = in + 13;
-    } else if (strncmp(in, "/tmp/", 5) == 0) {
-        rel = in + 5;
-    } else if (strncmp(in, "/var", 4) == 0 && in[4] == 0) {
-        rel = "";
-    } else if (in[0] == '/') {
-        rel = in + 1;
-    }
-    snprintf(out, cap, "%s/%s", g_sandbox_root, rel);
-    return 1;
-}
-
-int chm_foundation_map_path_write(const char *in, char *out, size_t cap)
-{
-    char parent[1024];
-    char *slash;
-    size_t len;
-
-    if (!chm_foundation_map_path(in, out, cap))
-        return 0;
-    len = strlen(out);
-    if (len >= sizeof(parent))
-        return 1;
-    memcpy(parent, out, len + 1);
-    slash = strrchr(parent, '/');
-    if (!slash || slash == parent)
-        return 1;
-    *slash = 0;
-    for (char *p = parent + 1; *p; p++) {
-        if (*p != '/')
-            continue;
-        *p = 0;
-        mkdir(parent, 0700);
-        *p = '/';
-    }
-    mkdir(parent, 0700);
-    return 1;
-}
+#include <dirent.h>
+#include <math.h>
+#include <yxml.h>
+#include "foundation_paths.inc"
 
 #define FO_MAX_CLASSES 320
 #define FO_MAX_ITEMS 256
@@ -197,6 +145,8 @@ static const struct {
     { "NSURL", "NSObject", 32 },
     { "NSURLRequest", "NSObject", 32 },
     { "NSMutableURLRequest", "NSURLRequest", 32 },
+    { "NSURLResponse", "NSObject", 32 },
+    { "NSHTTPURLResponse", "NSURLResponse", 32 },
     { "NSURLSession", "NSObject", 32 },
     { "NSURLSessionConfiguration", "NSObject", 32 },
     { "NSURLSessionTask", "NSObject", 32 },
@@ -519,7 +469,12 @@ static void *n_double(void *cls, const char *sel, double value)
 
 static void *n_int(void *c, const char *s, int v) { return n_signed(c, s, v); }
 static void *n_uint(void *c, const char *s, unsigned int v) { return n_unsigned(c, s, v); }
-static void *n_bool(void *c, const char *s, signed char v) { return n_signed(c, s, v != 0); }
+static void *n_bool(void *c, const char *s, signed char v)
+{
+    fo_number *n = n_signed(c, s, v != 0);
+    if (n) n->type = 'B';
+    return n;
+}
 static void *n_float(void *c, const char *s, float v) { return n_double(c, s, v); }
 
 static int fo_is_handle(void *p)
@@ -835,12 +790,11 @@ static int o_is_equal(void *self, const char *sel, void *other)
     return 0;
 }
 
-static int o_compare(void *self, const char *sel, void *other)
+static long o_compare(void *self, const char *sel, void *other)
 {
     (void)sel;
-    if (!fo_is_string(self) || !fo_is_string(other))
-        return 0;
-    return strcmp(fo_bytes(self), fo_bytes(other));
+    int value = strcmp(fo_bytes(self), fo_bytes(other));
+    return (value > 0) - (value < 0);
 }
 
 static int o_responds(void *self, const char *cmd, const char *sel)
@@ -1588,26 +1542,6 @@ static void *make_error(const char *domain, long code, const char *desc)
     return d;
 }
 
-static int mkdir_p(const char *path)
-{
-    char tmp[1024];
-    size_t len;
-    size_t i;
-
-    len = strlen(path);
-    if (len >= sizeof(tmp) || !len)
-        return -1;
-    memcpy(tmp, path, len + 1);
-    for (i = 1; i < len; i++) {
-        if (tmp[i] != '/')
-            continue;
-        tmp[i] = 0;
-        mkdir(tmp, 0700);
-        tmp[i] = '/';
-    }
-    return mkdir(tmp, 0700);
-}
-
 static int ensure_parent(const char *path)
 {
     char tmp[1024];
@@ -1635,10 +1569,10 @@ static int f_create_dir(void *self, const char *sel, void *path, int intermediat
         *error = NULL;
     if (!chm_foundation_map_path(fo_bytes(path), mapped, sizeof(mapped)))
         return 0;
-    rc = mkdir_p(mapped);
+    rc = intermediate ? mkdir_p(mapped) : directory_one(mapped);
     if (g_session)
         chm_session_log(g_session, "mkdir [%s] rc=%d", mapped, rc);
-    if (rc == 0 || errno == EEXIST)
+    if (rc == 0)
         return 1;
     if (error)
         *error = make_error("NSCocoaErrorDomain", 516, "create directory failed");
@@ -1871,10 +1805,7 @@ static void *f_urls(void)
     return a;
 }
 
-static void *f_contents(void)
-{
-    return fo_array_new();
-}
+static void *directory_contents(void *self, const char *sel, void *path, void **error);
 
 static void *h_write_data(void *self, const char *sel, void *data)
 {
@@ -2166,10 +2097,13 @@ static void *bundle_id(void)
     return fo_string_new("com.app.chimera");
 }
 
+#include "foundation_services.inc"
+
 static const struct {
     const char *sel;
     void *imp;
 } g_methods[] = {
+#include "foundation_services_methods.inc"
     { "self", (void *)o_self },
     { "init", (void *)o_self },
     { "retain", (void *)o_retain },
@@ -2186,7 +2120,7 @@ static const struct {
     { "hash", (void *)o_hash },
     { "isEqual:", (void *)o_is_equal },
     { "isEqualToString:", (void *)o_is_equal },
-    { "compare:", (void *)o_compare },
+    { "compare:", (void *)string_compare },
     { "isKindOfClass:", (void *)o_is_kind },
     { "isMemberOfClass:", (void *)o_is_kind },
     { "respondsToSelector:", (void *)o_responds },
@@ -2198,8 +2132,8 @@ static const struct {
     { "UTF8String", (void *)o_utf8 },
     { "fileSystemRepresentation", (void *)o_utf8 },
     { "bytes", (void *)o_utf8 },
-    { "absoluteString", (void *)s_identity },
-    { "path", (void *)s_identity },
+    { "absoluteString", (void *)url_string },
+    { "path", (void *)url_string },
     { "lastPathComponent", (void *)s_last_component },
     { "pathExtension", (void *)s_extension },
     { "stringByDeletingLastPathComponent", (void *)s_delete_last },
@@ -2276,7 +2210,7 @@ static const struct {
     { "allKeys", (void *)d_keys },
     { "allValues", (void *)d_values },
     { "fileExistsAtPath:", (void *)f_exists },
-    { "fileExistsAtPath:isDirectory:", (void *)f_exists },
+    { "fileExistsAtPath:isDirectory:", (void *)file_exists_directory },
     { "createDirectoryAtPath:withIntermediateDirectories:attributes:error:", (void *)f_create_dir },
     { "removeItemAtPath:error:", (void *)f_remove },
     { "createFileAtPath:contents:attributes:", (void *)f_create_file },
@@ -2299,13 +2233,13 @@ static const struct {
     { "synchronizeFile", (void *)h_sync },
     { "fileDescriptor", (void *)h_fd },
     { "dataWithContentsOfFile:", (void *)d_data_with_file },
-    { "writeToFile:atomically:", (void *)d_write_file },
+    { "writeToFile:atomically:", (void *)collection_write_file },
     { "stringWithContentsOfFile:encoding:error:", (void *)str_with_contents_of_file },
     { "writeToFile:atomically:encoding:error:", (void *)str_write_to_file },
     { "initWithFormat:arguments:", (void *)chm_ns_format_list },
     { "URLsForDirectory:inDomains:", (void *)f_urls },
     { "URLForDirectory:inDomain:appropriateForURL:create:error:", (void *)f_urls },
-    { "contentsOfDirectoryAtPath:error:", (void *)f_contents },
+    { "contentsOfDirectoryAtPath:error:", (void *)directory_contents },
     { "processInfo", NULL },
     { "defaultManager", NULL },
     { "mainBundle", NULL },
@@ -2375,6 +2309,7 @@ void chm_foundation_init(chm_session *s)
 void chm_foundation_shutdown(void)
 {
     int i;
+    services_shutdown();
 
     for (i = 0; i < g_class_count; i++) {
         free(g_classes[i]->name);

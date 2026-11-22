@@ -105,7 +105,20 @@ static void paint_view(chm_draw_fn draw, void *context, ui_view *v, double px, d
         if (c.width > 0) draw(context, &c);
         c.width = v->w;
     }
-    emit_text(draw, context, &c, v->text, v->font_size, v->font_align, v->number_of_lines, paint_color(v->text_color, alpha));
+    const char *text = v->text;
+    char masked[256];
+    uint32_t text_color = v->text_color;
+    if (chm_objc_is_kind(v->object, "UITextField")) {
+        if (!text || !*text) { text = v->placeholder; text_color = 0xff888888u; }
+        else if (v->secure) {
+            size_t n = 0;
+            for (const unsigned char *p = (const unsigned char *)text; *p && n < sizeof(masked) - 1; p++)
+                if ((*p & 0xc0) != 0x80) masked[n++] = '*';
+            masked[n] = 0; text = masked;
+        }
+    }
+    if (chm_objc_is_kind(v->object, "UIActivityIndicatorView") && v->animating) text = "◌";
+    emit_text(draw, context, &c, text, v->font_size, v->font_align, v->number_of_lines, paint_color(text_color, alpha));
     paint_bar(draw, context, v, &c, alpha);
     if (v->clips) {
         left = fmax(left, c.x); top = fmax(top, c.y);
@@ -121,6 +134,7 @@ static int prepare_draw(void *context)
     container_layout(as_vc(g_key_window->owner));
     for (ui_vc *modal = g_modal; modal; modal = modal->previous_modal) container_layout(modal);
     tables_prepare(g_key_window);
+    dialogs_prepare();
     layout_dirty = 1;
     ui_layout();
     return 1;
