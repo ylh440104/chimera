@@ -4,7 +4,7 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 runner=${1:?usage: run_darwin_abi.sh /path/to/chimera_run}
 tmp=$(mktemp -d)
 trap 'rm -rf -- "$tmp"' EXIT
-for name in darwin_format darwin_dispatch darwin_foundation darwin_scene darwin_containers; do
+for name in darwin_format darwin_dispatch darwin_foundation darwin_scene darwin_containers darwin_layout; do
     "${CLANG:-clang-18}" -target arm64-apple-ios15.0 -O2 -fno-objc-arc -fno-builtin -fno-stack-protector -c "$root/tests/$name.m" -o "$tmp/$name.o"
     "${LD64:-ld64.lld-18}" -arch arm64 -platform_version ios 15.0 15.0 -e _main -fixup_chains -undefined dynamic_lookup -o "$tmp/$name" "$tmp/$name.o"
     mkdir "$tmp/$name.root"
@@ -20,6 +20,17 @@ for name in darwin_format darwin_dispatch darwin_foundation darwin_scene darwin_
                 cp "$frame" "$log" "$CHM_TEST_EXPORT/"
             fi
         done
+        printf '%s: passed\n' "$name"
+        continue
+    fi
+    if [ "$name" = darwin_layout ]; then
+        CHM_SANDBOX_ROOT="$tmp/$name.root" CHM_DRAW_OUT="$tmp/layout.jsonl" timeout 20 "$runner" "$tmp/$name" >"$tmp/$name.log" 2>&1 || { rc=$?; cat "$tmp/$name.log" >&2; exit "$rc"; }
+        grep -Fx 'entry returned 0' "$tmp/$name.log"
+        python3 "$root/tests/check_layout_draw.py" "$tmp/layout.jsonl"
+        if [ -n "${CHM_TEST_EXPORT:-}" ]; then
+            mkdir -p "$CHM_TEST_EXPORT"
+            cp "$tmp/layout.jsonl" "$tmp/$name.log" "$CHM_TEST_EXPORT/"
+        fi
         printf '%s: passed\n' "$name"
         continue
     fi

@@ -45,6 +45,7 @@ __attribute__((objc_root_class))
 @interface NSMutableArray : NSArray
 - (id)initWithCapacity:(NSUInteger)capacity;
 - (void)addObject:(id)object;
+- (void)removeAllObjects;
 @end
 
 @interface NSDictionary : NSObject
@@ -147,6 +148,10 @@ int main(int argc, char **argv)
     if (!same(name, "ABIAppDelegate") || NSClassFromString(name) != [ABIAppDelegate class]) return 56;
     if (!same(NSStringFromClass([NSString class]), "NSString") || NSClassFromString(@"NSString") != [NSString class]) return 57;
     if (!same(NSStringFromSelector(NSSelectorFromString(@"description")), "description")) return 58;
+    [array removeAllObjects];
+    if ([array count]) return 86;
+    [array addObject:@7];
+    if ([array count] != 1 || [[array objectAtIndex:0] intValue] != 7) return 87;
     if (UIApplicationMain(argc, argv, (NSString *)0, name) != 0 || !launched || !active || resigned) return 59;
     return 0;
 }

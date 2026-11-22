@@ -26,16 +26,7 @@ static uint64_t g_avcat[2];
 static uint64_t g_edge_zero[4];
 static uint64_t g_af_key;
 
-static char g_const_storage[64][96];
-static int g_const_used;
-
-static void *const_data(const char *name)
-{
-    if (g_const_used >= 64)
-        return g_const_storage[0];
-    snprintf(g_const_storage[g_const_used], sizeof(g_const_storage[0]), "%s", name);
-    return g_const_storage[g_const_used++];
-}
+static const double g_rect_zero[4];
 
 static int64_t cf_zero_i(void)
 {
@@ -99,23 +90,26 @@ static void CGImageRelease_impl(void *img)
     (void)img;
 }
 
-static int CGRectContainsPoint_impl(void *rect, void *point)
+typedef struct { double x, y, w, h; } cg_rect;
+typedef struct { double x, y; } cg_point;
+
+static int CGRectContainsPoint_impl(cg_rect r, cg_point p)
 {
-    (void)rect;
-    (void)point;
-    return 0;
+    double left = r.w < 0 ? r.x + r.w : r.x;
+    double top = r.h < 0 ? r.y + r.h : r.y;
+    double right = r.w < 0 ? r.x : r.x + r.w;
+    double bottom = r.h < 0 ? r.y : r.y + r.h;
+    return p.x >= left && p.x < right && p.y >= top && p.y < bottom;
 }
 
-static int64_t CGRectGetMaxX_impl(void *rect)
+static double CGRectGetMaxX_impl(cg_rect r)
 {
-    (void)rect;
-    return 0;
+    return r.w < 0 ? r.x : r.x + r.w;
 }
 
-static int64_t CGRectGetMaxY_impl(void *rect)
+static double CGRectGetMaxY_impl(cg_rect r)
 {
-    (void)rect;
-    return 0;
+    return r.h < 0 ? r.y : r.y + r.h;
 }
 
 static void *CFCopyHomeDirectoryURLForUser_impl(void)
@@ -545,7 +539,7 @@ static const fw_entry g_fw[] = {
     { "_CGRectContainsPoint", (void *)CGRectContainsPoint_impl },
     { "_CGRectGetMaxX", (void *)CGRectGetMaxX_impl },
     { "_CGRectGetMaxY", (void *)CGRectGetMaxY_impl },
-    { "_CGRectZero", (void *)const_data },
+    { "_CGRectZero", (void *)g_rect_zero },
     { "_SecItemAdd", (void *)SecItemAdd_impl },
     { "_SecItemCopyMatching", (void *)SecItemCopyMatching_impl },
     { "_SecItemDelete", (void *)SecItemDelete_impl },
@@ -658,7 +652,13 @@ void *chm_frameworks_lookup(const char *name)
     }
     for (i = 0; g_data[i].name; i++) {
         if (strcmp(g_data[i].name, name) == 0)
-            return g_data[i].addr;
+            {
+                if (!strcmp(name, "_UIFontTextStyleBody"))
+                    g_nskey[8] = (uint64_t)(uintptr_t)chm_foundation_string("UICTFontTextStyleBody");
+                if (!strcmp(name, "_UIFontTextStyleFootnote"))
+                    g_nskey[9] = (uint64_t)(uintptr_t)chm_foundation_string("UICTFontTextStyleFootnote");
+                return g_data[i].addr;
+            }
     }
     return NULL;
 }

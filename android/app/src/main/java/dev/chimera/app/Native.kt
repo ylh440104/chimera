@@ -26,6 +26,9 @@ class Native {
         external fun render(width: Int, height: Int): IntArray?
 
         @JvmStatic
+        external fun paint(target: FramePainter, width: Int, height: Int): Boolean
+
+        @JvmStatic
         external fun release()
     }
 }

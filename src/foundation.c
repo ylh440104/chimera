@@ -228,6 +228,11 @@ static const struct {
     { "NSParagraphStyle", "NSObject", 32 },
     { "NSMutableParagraphStyle", "NSParagraphStyle", 32 },
     { "NSLayoutConstraint", "NSObject", 32 },
+    { "NSLayoutAnchor", "NSObject", 32 },
+    { "NSLayoutXAxisAnchor", "NSLayoutAnchor", 32 },
+    { "NSLayoutYAxisAnchor", "NSLayoutAnchor", 32 },
+    { "NSLayoutDimension", "NSLayoutAnchor", 32 },
+    { "UILayoutGuide", "NSObject", 32 },
     { "NSExpression", "NSObject", 32 },
     { "NSAssertionHandler", "NSObject", 16 },
     { "NSOperationQueue", "NSObject", 32 },
@@ -1252,6 +1257,16 @@ static void a_add(void *self, const char *sel, void *obj)
         collection_error("addObject:");
 }
 
+static void a_remove_all(void *self, const char *sel)
+{
+    (void)sel;
+    if (!fo_is_array(self)) return;
+    fo_array *a = self;
+    if (a->count) memset(a->items, 0, (size_t)a->count * sizeof(*a->items));
+    a->count = 0;
+    a->mutations++;
+}
+
 static void *a_joined(void *self, const char *sel, void *sep)
 {
     fo_array *a = self;
@@ -2249,6 +2264,7 @@ static const struct {
     { "firstObject", (void *)a_first },
     { "lastObject", (void *)a_last },
     { "addObject:", (void *)a_add },
+    { "removeAllObjects", (void *)a_remove_all },
     { "componentsJoinedByString:", (void *)a_joined },
     { "valueForKey:", (void *)d_value },
     { "valueForKeyPath:", (void *)d_value_path },

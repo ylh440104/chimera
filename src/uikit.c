@@ -30,7 +30,18 @@ typedef struct ui_view {
     int kid_cap;
     void *layer;
     void *owner;
-    char text[UI_TEXT_MAX];
+    char *text;
+    double font_size;
+    uint32_t text_color;
+    int number_of_lines;
+    int translates;
+    void *font;
+    void *delegate;
+    void *data_source;
+    void *background_view;
+    double progress;
+    unsigned goal_mask;
+    double goals[8];
 } ui_view;
 
 typedef struct ui_vc {
@@ -63,10 +74,41 @@ typedef struct ui_item {
     void *scroll_appearance;
     void *right_item;
     void *left_item;
+    void *target;
+    const char *action;
     uint32_t background;
     struct ui_item *next;
 } ui_item;
 
+enum ui_attr { LEFT, RIGHT, TOP, BOTTOM, WIDTH, HEIGHT, CENTER_X, CENTER_Y };
+typedef struct ui_anchor {
+    void *object;
+    ui_view *view;
+    enum ui_attr attr;
+    struct ui_anchor *next;
+} ui_anchor;
+typedef struct ui_constraint {
+    void *object;
+    ui_anchor *first;
+    ui_anchor *second;
+    double constant;
+    double multiplier;
+    int active;
+    struct ui_constraint *next;
+} ui_constraint;
+typedef struct ui_guide {
+    void *object;
+    ui_view *view;
+    struct ui_guide *next;
+} ui_guide;
+
+static ui_anchor *anchors;
+static ui_constraint *constraints;
+static ui_guide *guides;
+static int layout_busy;
+static int layout_dirty = 1;
+static void ui_layout(void);
+static void table_update(ui_view *table);
 static ui_item *items;
 static void *wc_view(void *self, const char *sel);
 static void container_sync(ui_vc *vc);
@@ -125,6 +167,10 @@ static ui_view *as_view(void *p)
     if (!v) return NULL;
     v->object = p;
     v->alpha = 1.0;
+    v->font_size = 17;
+    v->text_color = 0xffffffffu;
+    v->number_of_lines = 1;
+    v->translates = 1;
     v->next = views;
     views = v;
     return v;
@@ -157,6 +203,7 @@ static void view_init(ui_view *v, double x, double y, double w, double h)
     v->w = w;
     v->h = h;
     v->alpha = 1.0;
+    layout_dirty = 1;
 }
 
 static void view_remove(ui_view *c);
@@ -177,8 +224,11 @@ static int view_add(ui_view *p, ui_view *c)
     view_remove(c);
     c->parent = p;
     p->kids[p->nkids++] = c;
+    layout_dirty = 1;
     return 1;
 }
+
+#include "ui_geometry.inc"
 
 static void view_remove(ui_view *c)
 {
@@ -202,6 +252,13 @@ static ui_rect n_rect(double x, double y, double w, double h)
 {
     return (ui_rect){x, y, w, h};
 }
+
+typedef struct ui_font {
+    void *object;
+    double size;
+    struct ui_font *next;
+} ui_font;
+static ui_font *fonts;
 
 static void *color_new(double r, double g, double b, double a)
 {
@@ -267,6 +324,8 @@ static void v_set_frame(void *self, const char *sel, ui_rect rect)
     v->y = rect.y;
     v->w = rect.w;
     v->h = rect.h;
+    layout_dirty = 1;
+    container_layout(as_vc(v->owner));
 }
 
 static ui_rect v_bounds(void *self, const char *sel)
@@ -396,12 +455,14 @@ static void v_set_needs_layout(void *self, const char *sel)
 {
     (void)sel;
     (void)self;
+    layout_dirty = 1;
 }
 
 static void v_layout_if_needed(void *self, const char *sel)
 {
     (void)sel;
     (void)self;
+    ui_layout();
 }
 
 static void v_size_to_fit(void *self, const char *sel)
@@ -432,7 +493,11 @@ static void l_set_text(void *self, const char *sel, void *text)
     if (!v)
         return;
     s = text ? (const char *)chm_objc_send0(text, "UTF8String") : NULL;
-    snprintf(v->text, sizeof(v->text), "%s", s ? s : "");
+    char *copy = s ? strdup(s) : NULL;
+    if (s && !copy) return;
+    free(v->text);
+    v->text = copy;
+    layout_dirty = 1;
 }
 
 static void *l_text(void *self, const char *sel)
@@ -984,16 +1049,19 @@ static void *app_shared(void *cls, const char *sel)
 static void *app_delegate(void *self, const char *sel)
 {
     (void)sel;
-    if (!self || !chm_foundation_isa_is(self, "UIApplication"))
-        return NULL;
-    return ((ui_app *)self)->delegate;
+    if (self && chm_objc_is_kind(self, "UIApplication")) return ((ui_app *)self)->delegate;
+    ui_view *v = as_view(self);
+    return v ? v->delegate : NULL;
 }
 
 static void app_set_delegate(void *self, const char *sel, void *d)
 {
     (void)sel;
-    if (self && chm_foundation_isa_is(self, "UIApplication"))
-        ((ui_app *)self)->delegate = d;
+    if (self && chm_objc_is_kind(self, "UIApplication")) ((ui_app *)self)->delegate = d;
+    else {
+        ui_view *v = as_view(self);
+        if (v) v->delegate = d;
+    }
 }
 
 static void *app_key_window(void *self, const char *sel)
@@ -1213,42 +1281,7 @@ static void blend_fill(uint32_t *buf, int bw, int bh, int x0, int y0, int x1, in
     }
 }
 
-static void render_view(uint32_t *buf, int bw, int bh, ui_view *v, int px, int py, int cx, int cy)
-{
-    int x0;
-    int y0;
-    int x1;
-    int y1;
-    int i;
-
-    if (!v || v->hidden)
-        return;
-    x0 = px + (int)(v->x + 0.5);
-    y0 = py + (int)(v->y + 0.5);
-    x1 = x0 + (int)(v->w + 0.5);
-    y1 = y0 + (int)(v->h + 0.5);
-    if (v->clips) {
-        if (x1 > cx)
-            x1 = cx;
-        if (y1 > cy)
-            y1 = cy;
-    }
-    if (((v->bg >> 24) & 0xff) != 0)
-        blend_fill(buf, bw, bh, x0, y0, x1, y1, v->bg);
-    for (i = 0; i < v->nkids; i++)
-        render_view(buf, bw, bh, v->kids[i], x0, y0, x1, y1);
-}
-
-int chm_ui_render(uint32_t *buf, int bw, int bh)
-{
-    if (!buf || bw <= 0 || bh <= 0)
-        return -1;
-    memset(buf, 0, (size_t)bw * (size_t)bh * sizeof(uint32_t));
-    if (!g_key_window)
-        return 0;
-    render_view(buf, bw, bh, g_key_window, 0, 0, bw, bh);
-    return 1;
-}
+#include "ui_draw.inc"
 
 int chm_ui_view_count(void)
 {
@@ -1270,10 +1303,13 @@ int chm_ui_view_count(void)
     return n;
 }
 
+#include "ui_widgets.inc"
+
 static const struct {
     const char *sel;
     void *imp;
 } g_ui_methods[] = {
+#include "ui_widget_methods.inc"
     { "initWithRootViewController:", (void *)nav_init_root },
     { "viewControllers", (void *)container_children },
     { "childViewControllers", (void *)container_children },
@@ -1376,6 +1412,7 @@ void chm_ui_shutdown(chm_session *s)
     while (views) {
         ui_view *next = views->next;
         free(views->kids);
+        free(views->text);
         free(views);
         views = next;
     }
@@ -1390,6 +1427,12 @@ void chm_ui_shutdown(chm_session *s)
         free(items);
         items = next;
     }
+    while (anchors) { ui_anchor *next = anchors->next; free(anchors); anchors = next; }
+    while (constraints) { ui_constraint *next = constraints->next; free(constraints); constraints = next; }
+    while (guides) { ui_guide *next = guides->next; free(guides); guides = next; }
+    while (fonts) { ui_font *next = fonts->next; free(fonts); fonts = next; }
+    layout_dirty = 1;
+    layout_busy = 0;
     chm_scene_reset();
     g_sess = NULL;
     g_app = NULL;

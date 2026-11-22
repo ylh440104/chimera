@@ -134,6 +134,67 @@ JNIEXPORT jintArray JNICALL Java_dev_chimera_app_Native_render(JNIEnv *env, jcla
     return out;
 }
 
+typedef struct {
+    JNIEnv *env;
+    jobject target;
+    jmethodID draw;
+    int failed;
+    size_t rectangles;
+    size_t texts;
+} paint_context;
+
+static void draw_to_android(void *context, const chm_draw_command *command)
+{
+    paint_context *p = context;
+    JNIEnv *env = p->env;
+    if (p->failed || (*env)->ExceptionCheck(env)) return;
+    if ((*env)->PushLocalFrame(env, 4) < 0) { p->failed = 1; return; }
+    jdouble geometry[] = {
+        command->x, command->y, command->width, command->height,
+        command->clip_left, command->clip_top, command->clip_right, command->clip_bottom,
+        command->font_size
+    };
+    jdoubleArray coords = (*env)->NewDoubleArray(env, 9);
+    jbyteArray text = NULL;
+    if (!coords) p->failed = 1;
+    if (!p->failed) (*env)->SetDoubleArrayRegion(env, coords, 0, 9, geometry);
+    if (!p->failed && command->text) {
+        size_t length = strlen(command->text);
+        if (length > 1024u * 1024u) p->failed = 1;
+        else {
+            text = (*env)->NewByteArray(env, (jsize)length);
+            if (!text) p->failed = 1;
+            else (*env)->SetByteArrayRegion(env, text, 0, (jsize)length, (const jbyte *)command->text);
+        }
+    }
+    if (!p->failed && !(*env)->ExceptionCheck(env)) {
+        (*env)->CallVoidMethod(env, p->target, p->draw, (jint)command->kind, text, coords,
+                              (jint)command->color, (jint)command->alignment, (jint)command->lines);
+        if (command->kind == 1) p->texts++;
+        else p->rectangles++;
+    }
+    if ((*env)->ExceptionCheck(env)) p->failed = 1;
+    (*env)->PopLocalFrame(env, NULL);
+}
+
+JNIEXPORT jboolean JNICALL Java_dev_chimera_app_Native_paint(JNIEnv *env, jclass cls,
+                                                           jobject target, jint width, jint height)
+{
+    (void)cls;
+    if (!target || !g_session || !chm_ui_running() || g_session->exit_code != 0 ||
+        width <= 0 || height <= 0 || width > 2048 || height > 2048) return JNI_FALSE;
+    jclass type = (*env)->GetObjectClass(env, target);
+    if (!type) return JNI_FALSE;
+    jmethodID draw = (*env)->GetMethodID(env, type, "draw", "(I[B[DIII)V");
+    (*env)->DeleteLocalRef(env, type);
+    if (!draw) return JNI_FALSE;
+    paint_context context = {env, target, draw, 0, 0, 0};
+    int rc = chm_ui_paint(draw_to_android, &context, width, height);
+    chm_session_log(g_session, "paint: rectangles=%zu text_commands=%zu result=%d",
+                    context.rectangles, context.texts, context.failed ? -1 : rc);
+    return rc == 1 && !context.failed ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT void JNICALL Java_dev_chimera_app_Native_release(JNIEnv *env, jclass cls)
 {
     (void)env;

@@ -175,19 +175,28 @@ class MainActivity : AppCompatActivity() {
                     if (result == "entry returned 0") {
                         val pumped = Native.pump()
                         if (pumped > 0) log("主队列执行 $pumped 个 block")
-                        val pixels = Native.render(720, 1280)
-                        if (pixels != null) {
-                            val image = Bitmap.createBitmap(pixels, 720, 1280, Bitmap.Config.ARGB_8888)
-                            runOnUiThread {
-                                if (closed) image.recycle()
-                                else {
-                                    bitmap = image
-                                    frameView.setImageBitmap(image)
-                                    frameView.visibility = View.VISIBLE
+                        val painter = FramePainter(720, 1280)
+                        var handedOff = false
+                        try {
+                            if (Native.paint(painter, 720, 1280)) {
+                                File(filesDir, "last-frame.png").outputStream().use {
+                                    check(painter.bitmap.compress(Bitmap.CompressFormat.PNG, 100, it))
                                 }
-                            }
-                            log("已显示客机首帧 720×1280")
-                        } else log("应用尚未创建可显示的窗口")
+                                File(filesDir, "last-frame-texts.txt").writeText(painter.texts.joinToString("\n"))
+                                log("绘制完成：${painter.rectangles} 个色块，${painter.texts.size} 条文字；已保存 last-frame.png")
+                                runOnUiThread {
+                                    if (closed) painter.bitmap.recycle()
+                                    else {
+                                        bitmap = painter.bitmap
+                                        frameView.setImageBitmap(painter.bitmap)
+                                        frameView.visibility = View.VISIBLE
+                                    }
+                                }
+                                handedOff = true
+                            } else log("没有可绘制的客机窗口")
+                        } finally {
+                            if (!handedOff) painter.bitmap.recycle()
+                        }
                     }
                     log(Native.report())
                 }

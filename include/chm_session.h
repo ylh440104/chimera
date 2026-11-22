@@ -152,6 +152,17 @@ void chm_ui_init(chm_session *s);
 void chm_ui_shutdown(chm_session *s);
 int chm_ui_viewport(int w, int h);
 int chm_ui_running(void);
+typedef struct {
+    int kind;
+    const char *text;
+    double x, y, width, height;
+    double clip_left, clip_top, clip_right, clip_bottom;
+    uint32_t color;
+    double font_size;
+    int alignment, lines;
+} chm_draw_command;
+typedef void (*chm_draw_fn)(void *context, const chm_draw_command *command);
+int chm_ui_paint(chm_draw_fn draw, void *context, int width, int height);
 int chm_ui_render(uint32_t *buf, int bw, int bh);
 int chm_ui_view_count(void);
 

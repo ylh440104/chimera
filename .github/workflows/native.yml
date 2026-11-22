@@ -83,6 +83,8 @@ jobs:
             abi-results/darwin_scene.log
             abi-results/container-*.argb
             abi-results/container-*.log
+            abi-results/layout.jsonl
+            abi-results/darwin_layout.log
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
