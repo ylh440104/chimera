@@ -57,11 +57,11 @@ jobs:
                src/format.c src/uikit.c src/scene.c src/scene_manifest.c yxml.o \
                src/trap.c src/loader.c"
           for tool in chmdump chmdemand chimera_run; do
-            cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -Iinclude -Ithird_party/yxml -o "$tool" "tools/$tool.c" $SRC -lm -ldl
+            cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -pthread -Iinclude -Ithird_party/yxml -o "$tool" "tools/$tool.c" $SRC -lm -ldl
           done
-          cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -Iinclude -Ithird_party/yxml -o test_input tests/test_input.c $SRC -lm -ldl
-          cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -Iinclude -Ithird_party/yxml -o test_table tests/test_table.c $SRC -lm -ldl
-          cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -Iinclude -Ithird_party/yxml -o test_services tests/test_services.c $SRC -lm -ldl
+          for test in test_input test_table test_services test_startup; do
+            cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -pthread -Iinclude -Ithird_party/yxml -o "$test" "tests/$test.c" $SRC -lm -ldl
+          done
           ./chmdump tests/fixture.ios > dump.txt
           head -3 dump.txt
           rc=0
@@ -94,6 +94,11 @@ jobs:
           cp tests/Localizable.strings abi-results/en.lproj/Localizable.strings
           CHM_SANDBOX_ROOT="$PWD/abi-results/services-root" timeout 30 ./test_services "$PWD/abi-results/darwin_services" > abi-results/services.log 2>&1 || { cat abi-results/services.log; exit 1; }
           cat abi-results/services.log
+          clang-18 -target arm64-apple-ios15.0 -O2 -fblocks -fno-objc-arc -fno-builtin -fno-stack-protector -c tests/darwin_startup.m -o abi-results/darwin_startup.o
+          ld64.lld-18 -arch arm64 -platform_version ios 15.0 15.0 -e _main -fixup_chains -exported_symbol _startup_state -undefined dynamic_lookup -o abi-results/darwin_startup abi-results/darwin_startup.o
+          mkdir -p abi-results/startup-root
+          CHM_SANDBOX_ROOT="$PWD/abi-results/startup-root" timeout 30 ./test_startup "$PWD/abi-results/darwin_startup" > abi-results/startup.log 2>&1 || { cat abi-results/startup.log; exit 1; }
+          cat abi-results/startup.log
 
       - uses: actions/upload-artifact@v4
         with:
@@ -114,6 +119,8 @@ jobs:
             abi-results/Info.plist
             abi-results/en.lproj
             abi-results/services.log
+            abi-results/startup.log
+            abi-results/darwin_startup
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
@@ -129,4 +136,5 @@ jobs:
             test_input
             test_table
             test_services
+            test_startup
           if-no-files-found: error

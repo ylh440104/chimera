@@ -33,13 +33,15 @@ class MainActivity : AppCompatActivity() {
             if (closed) return
             if (!busy && guestLive && editorToken == 0L) {
                 val epoch = serviceEpoch
+                val needsFirstFrame = frame == null
                 Native.executor.execute {
                     try {
                         if (!closed && epoch == serviceEpoch) {
                             val count = Native.pump()
                             check(count >= 0) { "客机异步回调异常" }
-                            if (count > 0) drawGuestFrame()
-                            else serviceOutputs()
+                            if (count > 0 || needsFirstFrame) drawGuestFrame(epoch)
+                            else serviceOutputs(epoch)
+
                         }
                     } catch (e: Exception) {
                         log("异步处理失败：$e")
@@ -209,6 +211,7 @@ class MainActivity : AppCompatActivity() {
         if (busy || !ready || executed || closed) return
         busy = true
         executed = true
+        val epoch = serviceEpoch
         buttons()
         Native.executor.execute {
             try {
@@ -217,12 +220,15 @@ class MainActivity : AppCompatActivity() {
                     val result = Native.run()
                     log(result)
                     if (result == "entry returned 0") {
-                        val pumped = Native.pump()
-                        check(pumped >= 0) { "客机队列异常，重新导入后再运行" }
-                        if (pumped > 0) log("主队列执行 $pumped 个 block")
-                        check(drawGuestFrame()) { "没有可绘制的客机窗口" }
+                        log("准备绘制客机首帧")
+                        if (!drawGuestFrame(epoch)) log("等待客机创建窗口，继续处理队列")
+                        runOnUiThread {
+                            if (!closed && epoch == serviceEpoch) { guestLive = true; buttons() }
+                        }
                     }
-                    log(Native.report())
+                    val report = Native.report()
+                    log(report)
+                    File(filesDir, "last-report.txt").writeText(report)
                 }
             } catch (e: Exception) {
                 log("运行异常：$e")
@@ -234,27 +240,35 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun drawGuestFrame(): Boolean {
+    private fun drawGuestFrame(epoch: Long): Boolean {
+        if (closed || epoch != serviceEpoch) return false
         val painter = FramePainter(720, 1280)
-        if (!Native.paint(painter, 720, 1280)) return false
+        val status = Native.paint(painter, 720, 1280)
+        check(status >= 0) { "客机绘制失败（$status）" }
+        if (status == 0) {
+            serviceOutputs(epoch)
+            return false
+        }
         val next = painter.finish()
-        File(filesDir, "last-frame-texts.txt").writeText(next.texts.joinToString("\n"))
-        log("提交画面：${next.rectangles} 个色块，${next.texts.size} 条文字")
         runOnUiThread {
-            if (!closed) {
+            if (!closed && epoch == serviceEpoch) {
                 frame = next
                 frameView.submitFrame(next)
                 frameView.visibility = View.VISIBLE
-                guestLive = true
                 buttons()
             }
         }
-        serviceOutputs()
+        log("提交画面：${next.rectangles} 个色块，${next.texts.size} 条文字")
+        try {
+            File(filesDir, "last-frame-texts.txt").writeText(next.texts.joinToString("\n"))
+        } catch (e: java.io.IOException) {
+            log("保存画面诊断失败：$e")
+        }
+        serviceOutputs(epoch)
         return true
     }
 
-    private fun serviceOutputs() {
-        val epoch = serviceEpoch
+    private fun serviceOutputs(epoch: Long) {
         while (!closed && epoch == serviceEpoch) {
             val request = Native.nextRequest() ?: break
             GuestNetwork.send(request) { result ->
@@ -264,7 +278,7 @@ class MainActivity : AppCompatActivity() {
                         check(rc >= 0) { "网络完成回调异常" }
                         if (rc > 0) {
                             check(Native.pump() >= 0)
-                            check(drawGuestFrame())
+                            drawGuestFrame(epoch)
                             File(filesDir, "last-report.txt").writeText(Native.report())
                         }
                     } catch (e: Exception) {
@@ -336,6 +350,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun interactGuest(label: String, action: () -> Int) {
         if (closed || busy || !guestLive) return
+        val epoch = serviceEpoch
         busy = true
         buttons()
         Native.executor.execute {
@@ -347,7 +362,7 @@ class MainActivity : AppCompatActivity() {
                     check(rc >= 0) { "点击回调异常，已停止输入；重新导入可重建会话" }
                     val pumped = Native.pump()
                     check(pumped >= 0) { "客机队列异常，已停止输入" }
-                    check(drawGuestFrame()) { "点击后没有可绘制窗口" }
+                    drawGuestFrame(epoch)
                 }
             } catch (e: Exception) {
                 healthy = false

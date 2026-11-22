@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 static chm_session *session;
 static int (*guest_check)(int);
@@ -18,7 +19,21 @@ static void check(int stage)
     int rc = chm_session_callback(session, check_body, &stage);
     if (rc) fail("guest assertion", rc);
 }
-static int pump(void *context) { return (int)chm_dispatch_pump(context); }
+static void await_callbacks(int expected)
+{
+    struct timespec started, now;
+    const struct timespec pause = {0, 1000000};
+    clock_gettime(CLOCK_MONOTONIC, &started);
+    int completed = 0;
+    do {
+        completed += (int)chm_dispatch_pump(session);
+        if (session->exit_code < 0 || completed > expected) fail("queue execution", completed);
+        if (completed == expected && !chm_dispatch_pending()) return;
+        nanosleep(&pause, NULL);
+        clock_gettime(CLOCK_MONOTONIC, &now);
+    } while (now.tv_sec - started.tv_sec < 5);
+    fail("queue completion timeout", completed);
+}
 static void inspect(void *context, const chm_draw_command *c)
 {
     (void)context;
@@ -47,7 +62,7 @@ int main(int argc, char **argv)
     for (int i = 0; i < session->export_count; i++)
         if (!strcmp(session->exports[i].name, "_services_check")) guest_check = (int (*)(int))(uintptr_t)session->exports[i].addr;
     if (!guest_check) fail("check export", -1);
-    if (chm_session_callback(session, pump, session) != 3) fail("queue callbacks", -1);
+    await_callbacks(3);
     check(0);
     if (chm_ui_paint(inspect, NULL, 720, 1280) != 1 || labels != 5 || !field_y || !confirm_y || !disabled_y) fail("dialog rendering", labels);
     tap(disabled_x, disabled_y, 0);

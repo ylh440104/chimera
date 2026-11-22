@@ -492,6 +492,7 @@ static void *fo_handle_new(int fd, const char *path)
         return NULL;
     h->magic = FO_HANDLE_MAGIC;
     h->fd = fd;
+    if (chm_io_remap(fd, fd, 0)) { free(h); close(fd); return NULL; }
     h->closed = 0;
     if (path)
         snprintf(h->path, sizeof(h->path), "%s", path);
@@ -1807,6 +1808,8 @@ static void *f_urls(void)
 }
 
 static void *directory_contents(void *self, const char *sel, void *path, void **error);
+typedef struct { int fd; void *bytes; size_t length; int writing; } handle_io;
+static int handle_io_body(void *context);
 
 static void *h_write_data(void *self, const char *sel, void *data)
 {
@@ -1821,7 +1824,10 @@ static void *h_write_data(void *self, const char *sel, void *data)
     p = ((fo_data *)data)->bytes;
     left = (size_t)((fo_data *)data)->length;
     while (left) {
-        ssize_t n = write(h->fd, p, left);
+        handle_io io = {h->fd, (void *)p, left, 1};
+        unsigned depth = chm_guest_suspend();
+        int n = chm_session_callback(g_session, handle_io_body, &io);
+        chm_guest_resume(depth);
 
         if (n <= 0)
             break;
@@ -1831,13 +1837,34 @@ static void *h_write_data(void *self, const char *sel, void *data)
     return NULL;
 }
 
+static int handle_io_body(void *context)
+{
+    handle_io *io = context;
+    if (io->writing) {
+        const uint8_t *bytes = io->bytes;
+        size_t done = 0;
+        while (done < io->length) {
+            ssize_t count = write(io->fd, bytes + done, io->length - done);
+            if (count <= 0) break;
+            done += (size_t)count;
+        }
+        return done == io->length ? (int)done : -1;
+    }
+    uint8_t *bytes = io->bytes;
+    size_t done = 0;
+    while (done < io->length) {
+        ssize_t count = read(io->fd, bytes + done, io->length - done);
+        if (count <= 0) break;
+        done += (size_t)count;
+    }
+    return (int)done;
+}
+
 static void h_close(void *self)
 {
     fo_handle *h = self;
-
-    if (!fo_is_handle(h) || h->closed)
-        return;
-    close(h->fd);
+    if (!fo_is_handle(h) || h->closed) return;
+    chm_io_close_number(h->fd);
     h->closed = 1;
 }
 
@@ -1863,7 +1890,10 @@ static void *h_read_all(void *self)
             buf = nb;
             cap = ncap;
         }
-        n = read(h->fd, buf + len, cap - len);
+        handle_io io = {h->fd, buf + len, cap - len, 0};
+        unsigned depth = chm_guest_suspend();
+        n = chm_session_callback(g_session, handle_io_body, &io);
+        chm_guest_resume(depth);
         if (n <= 0)
             break;
         len += (size_t)n;
@@ -1887,7 +1917,10 @@ static void *h_read_len(void *self, const char *sel, int64_t want)
     if (!buf)
         return NULL;
     while (got < (size_t)want) {
-        ssize_t n = read(h->fd, buf + got, (size_t)want - got);
+        handle_io io = {h->fd, buf + got, (size_t)want - got, 0};
+        unsigned depth = chm_guest_suspend();
+        int n = chm_session_callback(g_session, handle_io_body, &io);
+        chm_guest_resume(depth);
 
         if (n <= 0)
             break;

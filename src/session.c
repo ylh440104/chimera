@@ -267,6 +267,7 @@ chm_session *chm_session_create(void)
 
     if (!s)
         return NULL;
+    atomic_init(&s->exit_code, 0);
     s->exports = calloc(CHM_MAX_EXPORTS, sizeof(*s->exports));
     s->missing = calloc(CHM_MAX_MISSING, sizeof(*s->missing));
     s->classes = calloc(CHM_MAX_CLASSES, sizeof(*s->classes));
@@ -283,6 +284,7 @@ chm_session *chm_session_create(void)
     chm_objc_session_init(s);
     chm_foundation_init(s);
     chm_ui_init(s);
+    chm_dispatch_set_session(s);
     return s;
 }
 
@@ -292,10 +294,12 @@ void chm_session_destroy(chm_session *s)
 
     if (!s)
         return;
-    chm_ui_shutdown(s);
     chm_dispatch_reset();
-    chm_blocks_reset();
+    chm_guest_lock();
+    chm_ui_shutdown(s);
     chm_foundation_shutdown();
+    chm_blocks_reset();
+    chm_io_reset();
     for (i = 0; i < s->image_count; i++)
         chm_close(&s->images[i]);
     if (s->sels) {
@@ -308,27 +312,28 @@ void chm_session_destroy(chm_session *s)
     free(s->classes);
     free(s->methods);
     free(s->log_buf);
+    chm_libc_set_session(NULL);
     free(s);
+    chm_guest_unlock();
 }
 
 void chm_session_log(chm_session *s, const char *fmt, ...)
 {
+    if (!s || !s->log_buf) return;
+    chm_guest_lock();
     va_list ap;
     char line[512];
-    size_t n;
-
-    if (!s || !s->log_buf)
-        return;
     va_start(ap, fmt);
     chm_format(line, sizeof(line), fmt, ap);
     va_end(ap);
-    n = strlen(line);
+    size_t n = strlen(line);
     if (s->log_len + n + 2 < s->log_cap) {
         memcpy(s->log_buf + s->log_len, line, n);
         s->log_len += n;
         s->log_buf[s->log_len++] = '\n';
         s->log_buf[s->log_len] = 0;
     }
+    chm_guest_unlock();
 }
 
 static void dir_of(const char *path, char *out, size_t cap)
@@ -450,23 +455,19 @@ int chm_session_run(chm_session *s, int argc, char **argv)
 
 void chm_session_report(chm_session *s, char *out, size_t cap)
 {
-    int i;
-    int shown = 0;
-
-    if (!s || !out || !cap)
-        return;
+    if (!s || !out || !cap) return;
+    chm_guest_lock();
     out[0] = 0;
-    snprintf(out, cap, "%s", s->log_buf);
+    snprintf(out, cap, "%s", s->log_buf ? s->log_buf : "");
     if (s->missing_count > 0) {
         size_t used = strlen(out);
-
         snprintf(out + used, cap - used, "missing distinct=%d:", s->missing_count);
-        for (i = 0; i < s->missing_count && shown < 12; i++) {
+        for (int i = 0; i < s->missing_count && i < 12; i++) {
             used = strlen(out);
             snprintf(out + used, cap - used, " %s", s->missing[i].name);
-            shown++;
         }
         used = strlen(out);
         snprintf(out + used, cap - used, "\n");
     }
+    chm_guest_unlock();
 }

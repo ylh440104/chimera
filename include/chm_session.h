@@ -5,6 +5,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdatomic.h>
+#include <sys/stat.h>
 
 #define CHM_MAX_IMAGES 32
 #define CHM_MAX_EXPORTS 16384
@@ -75,7 +77,7 @@ typedef struct chm_session {
     size_t log_len;
 
     bool prepared;
-    int exit_code;
+    atomic_int exit_code;
     char fault[512];
 } chm_session;
 
@@ -105,6 +107,13 @@ void *chm_block_copy(void *object);
 void chm_block_release(void *object);
 void chm_blocks_reset(void);
 void chm_dispatch_reset(void);
+void chm_dispatch_set_session(chm_session *session);
+int chm_dispatch_worker(void);
+int chm_dispatch_stopping(void);
+void chm_guest_lock(void);
+void chm_guest_unlock(void);
+unsigned chm_guest_suspend(void);
+void chm_guest_resume(unsigned depth);
 void chm_dispatch_init(void);
 void *chm_dispatch_lookup(const char *name);
 size_t chm_dispatch_pump(chm_session *s);
@@ -149,6 +158,17 @@ void *chm_objc_new_object(const char *cls_name);
 int chm_objc_session_add_method(chm_session *s, const chm_method_reg *m);
 
 void chm_libc_set_session(chm_session *s);
+extern uint64_t g_stdout_obj;
+extern uint64_t g_stderr_obj;
+void chm_io_reset(void);
+int chm_io_remap(int guest, int host, int reset_host);
+int chm_io_close_number(int guest);
+int chm_io_file_status(int guest, struct stat *status);
+int chm_io_seek_number(int guest, int64_t offset, int whence);
+int chm_io_fd_flags(int guest);
+int chm_io_set_fd_flags(int guest, int flags);
+int chm_io_get_status(int guest);
+int chm_io_set_status(int guest, int flags);
 void chm_libc_publish_images(chm_session *s);
 
 void *chm_frameworks_lookup(const char *name);

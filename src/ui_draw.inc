@@ -140,15 +140,24 @@ static int prepare_draw(void *context)
     return 1;
 }
 
+typedef struct { chm_draw_fn draw; void *context; int width, height; } draw_args;
+static int draw_body(void *context)
+{
+    draw_args *a = context;
+    if (!g_key_window) return 0;
+    prepare_draw(NULL);
+    paint_view(a->draw, a->context, g_key_window, 0, 0, 0, 0, a->width, a->height, 1, 0);
+    return 1;
+}
 int chm_ui_paint(chm_draw_fn draw, void *context, int width, int height)
 {
     if (!draw || width <= 0 || height <= 0 || width > 16384 || height > 16384) return -1;
-    if (!g_key_window || !g_sess) return 0;
+    if (!g_sess) return 0;
     if (g_sess->exit_code == -2) return -2;
-    int rc = chm_session_callback(g_sess, prepare_draw, NULL);
-    if (rc < 0) { if (rc == -2) g_sess->exit_code = -2; return rc; }
-    paint_view(draw, context, g_key_window, 0, 0, 0, 0, width, height, 1, 0);
-    return 1;
+    draw_args args = {draw, context, width, height};
+    int rc = chm_session_callback(g_sess, draw_body, &args);
+    if (rc == -2) g_sess->exit_code = -2;
+    return rc;
 }
 
 typedef struct { uint32_t *pixels; int width, height; } pixel_target;

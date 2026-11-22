@@ -101,19 +101,13 @@ JNIEXPORT jstring JNICALL Java_dev_chimera_app_Native_report(JNIEnv *env, jclass
     return (*env)->NewStringUTF(env, out);
 }
 
-static int pump_body(void *context)
-{
-    return (int)chm_dispatch_pump(context);
-}
-
 JNIEXPORT jint JNICALL Java_dev_chimera_app_Native_pump(JNIEnv *env, jclass cls)
 {
     (void)env;
     (void)cls;
-    if (!g_session || g_session->exit_code == -2) return -1;
-    int rc = chm_session_callback(g_session, pump_body, g_session);
-    if (rc == -2) g_session->exit_code = -2;
-    return rc;
+    if (!g_session || g_session->exit_code < 0) return -1;
+    size_t completed = chm_dispatch_pump(g_session);
+    return g_session->exit_code < 0 ? -1 : (jint)completed;
 }
 
 JNIEXPORT jint JNICALL Java_dev_chimera_app_Native_tap(JNIEnv *env, jclass cls,
@@ -206,22 +200,23 @@ static void draw_to_android(void *context, const chm_draw_command *command)
     (*env)->PopLocalFrame(env, NULL);
 }
 
-JNIEXPORT jboolean JNICALL Java_dev_chimera_app_Native_paint(JNIEnv *env, jclass cls,
-                                                           jobject target, jint width, jint height)
+JNIEXPORT jint JNICALL Java_dev_chimera_app_Native_paint(JNIEnv *env, jclass cls,
+                                                        jobject target, jint width, jint height)
 {
     (void)cls;
-    if (!target || !g_session || !chm_ui_running() || g_session->exit_code != 0 ||
-        width <= 0 || height <= 0 || width > 2048 || height > 2048) return JNI_FALSE;
+    if (!target || !g_session || g_session->exit_code != 0 ||
+        width <= 0 || height <= 0 || width > 2048 || height > 2048) return -1;
     jclass type = (*env)->GetObjectClass(env, target);
-    if (!type) return JNI_FALSE;
+    if (!type) return -1;
     jmethodID draw = (*env)->GetMethodID(env, type, "draw", "(I[B[DIII)V");
     (*env)->DeleteLocalRef(env, type);
-    if (!draw) return JNI_FALSE;
+    if (!draw) return -1;
     paint_context context = {env, target, draw, 0, 0, 0};
     int rc = chm_ui_paint(draw_to_android, &context, width, height);
-    chm_session_log(g_session, "paint: rectangles=%zu text_commands=%zu result=%d",
-                    context.rectangles, context.texts, context.failed ? -1 : rc);
-    return rc == 1 && !context.failed ? JNI_TRUE : JNI_FALSE;
+    if (context.failed) rc = -1;
+    if (rc != 0) chm_session_log(g_session, "paint: rectangles=%zu text_commands=%zu result=%d",
+                                 context.rectangles, context.texts, rc);
+    return rc;
 }
 
 #include "chimera_services.inc"

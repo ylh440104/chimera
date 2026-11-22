@@ -26,7 +26,7 @@ class Native {
         external fun render(width: Int, height: Int): IntArray?
 
         @JvmStatic
-        external fun paint(target: FramePainter, width: Int, height: Int): Boolean
+        external fun paint(target: FramePainter, width: Int, height: Int): Int
 
         @JvmStatic
         external fun tap(downX: Double, downY: Double, upX: Double, upY: Double): Int

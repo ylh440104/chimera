@@ -23,6 +23,10 @@ typedef struct {
     const char *kind;
 } chm_entry;
 
+static unsigned char guest_stdout_storage, guest_stderr_storage;
+static FILE *guest_stdout, *guest_stderr;
+static int g_vprintf_count;
+extern uint64_t g_stdout_obj, g_stderr_obj;
 static int g_resolved;
 
 static chm_session *g_null_log_session;
@@ -50,6 +54,11 @@ void chm_libc_publish_images(chm_session *s)
 void chm_runtime_init(void)
 {
     g_resolved = 0;
+    guest_stdout = (FILE *)&guest_stdout_storage;
+    guest_stderr = (FILE *)&guest_stderr_storage;
+    g_stdout_obj = (uint64_t)(uintptr_t)guest_stdout;
+    g_stderr_obj = (uint64_t)(uintptr_t)guest_stderr;
+    g_vprintf_count = 0;
 }
 
 void chm_runtime_note_resolved(void)
@@ -161,14 +170,19 @@ static char *realpath_impl(const char *path, char *resolved)
     return NULL;
 }
 
+#include "libc_io.inc"
+
 static int open_impl(const char *path, int flags, int mode)
 {
     return open(path, flags, (mode_t)mode);
 }
-
 static int fcntl_impl(int fd, int cmd, void *arg)
 {
-    return fcntl(fd, cmd, arg);
+    if (cmd == F_GETFL) return chm_io_get_status(fd);
+    if (cmd == F_SETFL) return chm_io_set_status(fd, (int)(intptr_t)arg);
+    if (cmd == F_GETFD) return chm_io_fd_flags(fd);
+    if (cmd == F_SETFD) return chm_io_set_fd_flags(fd, (int)(intptr_t)arg);
+    return io_fcntl(fd, cmd, arg);
 }
 
 static int mkdir_impl(const char *path, int mode)
@@ -272,7 +286,24 @@ static int msync_impl(void *addr, size_t len, int flags)
     return msync(addr, len, flags);
 }
 
-static int g_vprintf_count;
+static int output_number(FILE *stream)
+{
+    if (stream == guest_stdout) return STDOUT_FILENO;
+    if (stream == guest_stderr) return STDERR_FILENO;
+    return -1;
+}
+
+static size_t write_output(int fd, const void *bytes, size_t length)
+{
+    const unsigned char *data = bytes;
+    size_t offset = 0;
+    while (offset < length) {
+        ssize_t written = io_write(fd, data + offset, length - offset);
+        if (written <= 0) break;
+        offset += (size_t)written;
+    }
+    return offset;
+}
 
 static void emit_text(const char *text)
 {
@@ -287,20 +318,15 @@ extern void chm_fprintf_entry(void);
 int chm_fprintf_list(FILE *stream, const char *fmt, const void *slots)
 {
     size_t len;
-    if (!stream || !fmt)
-        return -1;
+    if (!stream || !fmt) return -1;
     char *text = chm_format_darwin(fmt, slots, &len);
-    if (!text)
-        return -1;
+    if (!text) return -1;
+    int descriptor = output_number(stream);
     int rc = (int)len;
-    if (stream == stdout || stream == stderr) {
-        if (g_vprintf_count <= 400) {
-            g_vprintf_count++;
-            emit_text(text);
-        }
-    } else if (fwrite(text, 1, len, stream) != len) {
-        rc = -1;
-    }
+    if (descriptor >= 0) {
+        if (write_output(descriptor, text, len) != len) rc = -1;
+        if (g_vprintf_count < 400) { g_vprintf_count++; emit_text(text); }
+    } else if (fwrite(text, 1, len, stream) != len) rc = -1;
     free(text);
     return rc;
 }
@@ -310,11 +336,66 @@ int chm_printf_list(const char *fmt, const void *slots)
     return chm_fprintf_list(stdout, fmt, slots);
 }
 
-static int setvbuf_impl(FILE *stream, char *buf, int mode, size_t size)
+static int stream_close_impl(FILE *stream)
 {
-    if (!stream)
-        return -1;
-    return setvbuf(stream, buf, mode, size);
+    int fd = output_number(stream);
+    return fd >= 0 ? io_close(fd) : fclose(stream);
+}
+
+static size_t fwrite_impl(const void *p, size_t size, size_t count, FILE *stream)
+{
+    if (!p || !size || !count) return 0;
+    int fd = output_number(stream);
+    if (fd < 0) return fwrite(p, size, count, stream);
+    if (count > SIZE_MAX / size) return 0;
+    size_t bytes = size * count;
+    return write_output(fd, p, bytes) / size;
+}
+
+static size_t fread_impl(void *p, size_t size, size_t count, FILE *stream)
+{
+    int fd = output_number(stream);
+    if (fd < 0) return fread(p, size, count, stream);
+    if (!p || !size || !count || count > SIZE_MAX / size) return 0;
+    size_t bytes = size * count;
+    ssize_t received = io_read(fd, p, bytes);
+    return received > 0 ? (size_t)received / size : 0;
+}
+
+static int fputs_impl(const char *text, FILE *stream)
+{
+    if (!text || !stream) return -1;
+    int fd = output_number(stream);
+    size_t length = strlen(text);
+    if (fd >= 0) return write_output(fd, text, length) == length ? (int)length : -1;
+    return fputs(text, stream);
+}
+
+static int fputc_impl(int value, FILE *stream)
+{
+    int fd = output_number(stream);
+    if (fd < 0) return fputc(value, stream);
+    unsigned char byte = (unsigned char)value;
+    return write_output(fd, &byte, 1) == 1 ? byte : -1;
+}
+
+static int fflush_impl(FILE *stream)
+{
+    if (output_number(stream) >= 0) return 0;
+    return stream ? fflush(stream) : fflush(NULL);
+}
+
+static int setvbuf_impl(FILE *stream, char *buffer, int mode, size_t size)
+{
+    if (output_number(stream) >= 0) return 0;
+    if (!stream) return -1;
+    return setvbuf(stream, buffer, mode, size);
+}
+
+static int fileno_impl(FILE *stream)
+{
+    int fd = output_number(stream);
+    return fd >= 0 ? fd : stream ? fileno(stream) : -1;
 }
 
 static FILE *fopen_mapped(const char *path, const char *mode)
@@ -334,61 +415,43 @@ static FILE *fopen_mapped(const char *path, const char *mode)
     return fp;
 }
 
-static int fclose_impl(FILE *fp)
+static int fclose_impl(FILE *fp) { return stream_close_impl(fp); }
+
+static int fdopen_impl(int guest_fd, const char *mode, FILE **stream)
 {
-    if (!fp)
+    if (!mode || !stream) { errno = EINVAL; return -1; }
+    if (guest_fd == STDOUT_FILENO) { *stream = guest_stdout; return 0; }
+    if (guest_fd == STDERR_FILENO) { *stream = guest_stderr; return 0; }
+    int host = io_host(guest_fd);
+    if (host < 0) { errno = EBADF; return -1; }
+    int duplicate = fcntl(host, F_DUPFD_CLOEXEC, 3);
+    if (duplicate < 0) return -1;
+    FILE *opened = fdopen(duplicate, mode);
+    if (!opened) { close(duplicate); return -1; }
+    if (guest_fd > STDERR_FILENO && io_track(guest_fd, duplicate, NULL, 0)) {
+        fclose(opened);
         return -1;
-    return fclose(fp);
+    }
+    *stream = opened;
+    return 0;
 }
 
-static size_t fwrite_impl(const void *p, size_t sz, size_t n, FILE *fp)
+static char *fgets_impl(char *s, int n, FILE *stream)
 {
-    if (!fp || !p)
-        return 0;
-    return fwrite(p, sz, n, fp);
+    int fd = output_number(stream);
+    if (fd < 0) return stream && s && n > 0 ? fgets(s, n, stream) : NULL;
+    if (!s || n <= 0) return NULL;
+    int i = 0;
+    while (i + 1 < n) {
+        ssize_t received = io_read(fd, s + i, 1);
+        if (received <= 0) break;
+        char value = s[i++];
+        if (value == '\n') break;
+    }
+    if (!i) return NULL;
+    s[i] = 0;
+    return s;
 }
-
-static size_t fread_impl(void *p, size_t sz, size_t n, FILE *fp)
-{
-    if (!fp || !p)
-        return 0;
-    return fread(p, sz, n, fp);
-}
-
-static int fputs_impl(const char *s, FILE *fp)
-{
-    if (!fp || !s)
-        return -1;
-    return fputs(s, fp);
-}
-
-static int fputc_impl(int c, FILE *fp)
-{
-    if (!fp)
-        return -1;
-    return fputc(c, fp);
-}
-
-static int fflush_impl(FILE *fp)
-{
-    if (!fp)
-        return -1;
-    return fflush(fp);
-}
-
-static char *fgets_impl(char *s, int n, FILE *fp)
-{
-    if (!fp || !s || n <= 0)
-        return NULL;
-    return fgets(s, n, fp);
-}
-
-static int fileno_impl(FILE *stream)
-{
-    return stream ? fileno(stream) : -1;
-}
-
-static _Thread_local int g_errno_cell;
 
 static int *sh_errno_impl(void)
 {
@@ -746,6 +809,7 @@ static const chm_entry g_entries[] = {
     FN("_printf", chm_printf_entry, "libc.io"),
     FN("_fprintf", chm_fprintf_entry, "libc.io"),
     FN("_fopen", fopen_mapped, "libc.io"),
+    FN("_fdopen", fdopen_impl, "libc.io"),
     FN("_freopen", fopen_mapped, "libc.io"),
     FN("_fclose", fclose_impl, "libc.io"),
     FN("_fwrite", fwrite_impl, "libc.io"),
@@ -772,21 +836,21 @@ static const chm_entry g_entries[] = {
     FN("___assert_rtn", assert_rtn_impl, "libc.guard"),
     FN("_access", safe_access, "libc.io"),
     FN("_open", open_impl, "libc.io"),
-    FN("_close", close, "libc.io"),
-    FN("_read", read, "libc.io"),
-    FN("_write", write, "libc.io"),
-    FN("_lseek", lseek, "libc.io"),
-    FN("_fstat", fstat, "libc.io"),
+    FN("_close", chm_io_close_number, "libc.io"),
+    FN("_read", io_read, "libc.io"),
+    FN("_write", io_write, "libc.io"),
+    FN("_lseek", chm_io_seek_number, "libc.io"),
+    FN("_fstat", chm_io_file_status, "libc.io"),
     FN("_stat", safe_stat, "libc.io"),
     FN("_mkdir", mkdir_impl, "libc.io"),
     FN("_unlink", unlink, "libc.io"),
     FN("_opendir", opendir, "libc.io"),
     FN("_fcntl", fcntl_impl, "libc.io"),
-    FN("_dup2", dup2, "libc.proc"),
-    FN("_pipe", pipe, "libc.proc"),
+    FN("_dup2", io_dup2, "libc.proc"),
+    FN("_pipe", io_pipe, "libc.proc"),
     FN("_getpid", getpid, "libc.proc"),
     FN("_kill", kill_impl, "libc.proc"),
-    FN("_sleep", sleep, "libc.proc"),
+    FN("_sleep", io_sleep, "libc.proc"),
     FN("_usleep", usleep, "libc.proc"),
     FN("_setenv", safe_setenv, "libc.env"),
     FN("_getenv", safe_getenv, "libc.env"),

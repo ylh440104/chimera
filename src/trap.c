@@ -10,6 +10,8 @@
 #include <ucontext.h>
 #include <unistd.h>
 
+#include "guest_gate.inc"
+
 #define CHM_ALTSTACK 65536
 
 static _Thread_local sigjmp_buf g_jump;
@@ -204,12 +206,15 @@ int chm_session_callback(chm_session *s, int (*body)(void *), void *context)
     if (!s || !body) return -1;
     chm_trap_install();
     if (g_armed) return body(context);
+    unsigned depth = guest_depth;
+    chm_guest_lock();
     g_pc = g_lr = g_sp = g_far = g_fp = 0;
     g_signal = 0;
     if (sigsetjmp(g_jump, 1) == 0) {
         g_armed = 1;
         int rc = body(context);
         g_armed = 0;
+        guest_restore_depth(depth);
         return rc;
     }
     g_armed = 0;
@@ -243,6 +248,7 @@ int chm_session_callback(chm_session *s, int (*body)(void *), void *context)
     describe_pc(s, g_pc);
     dump_stack(s, g_sp);
     chm_objc_dump_trace(s);
+    guest_restore_depth(depth);
     return -2;
 }
 

@@ -8,8 +8,8 @@
 
 static uint64_t g_task_self;
 static uint64_t g_stack_guard;
-static uint64_t g_stdout_obj;
-static uint64_t g_stderr_obj;
+uint64_t g_stdout_obj;
+uint64_t g_stderr_obj;
 static uint64_t g_environ_ptr;
 static uint64_t g_empty_array;
 static uint64_t g_empty_dictionary;
