@@ -182,6 +182,30 @@ void chm_foundation_set_bundle(const char *root)
         else strcpy(g_bundle_root, root);
     }
 }
+void *chm_foundation_bundle_info(void)
+{
+    char path[2048];
+    int n = snprintf(path, sizeof(path), "%s/Info.plist", g_bundle_root);
+    if (n < 0 || (size_t)n >= sizeof(path)) return NULL;
+    void *info = plist_read_data(read_whole_file(path));
+    return fo_is_dict(info) ? info : NULL;
+}
+static void *bundle_info_value(void *self, const char *sel, void *key)
+{
+    (void)self; (void)sel; return d_value(chm_foundation_bundle_info(), NULL, key);
+}
+static long string_compare_insensitive(void *self, const char *sel, void *other)
+{
+    (void)sel;
+    int rc = strcasecmp(fo_bytes(self), fo_bytes(other)); return (rc > 0) - (rc < 0);
+}
+static int data_write_options(void *self, const char *sel, void *path, unsigned long options, void **error)
+{
+    if (error) *error = NULL;
+    int ok = d_write_file(self, sel, path, (options & 1) != 0);
+    if (!ok && error) *error = make_error("NSCocoaErrorDomain", errno, "Cannot write data");
+    return ok;
+}
 static void *bundle_path(void *self, const char *sel) { (void)self; (void)sel; return fo_string_new(g_bundle_root); }
 static void *bundle_resource(void *self, const char *sel, void *name, void *extension)
 {

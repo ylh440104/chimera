@@ -44,6 +44,13 @@ __attribute__((objc_root_class))
 @end
 @interface NSData : NSObject
 + (id)dataWithContentsOfFile:(id)path;
+- (BOOL)writeToFile:(id)path options:(NSUInteger)options error:(id *)error;
+@end
+@interface NSBundle : NSObject
++ (id)mainBundle;
+- (id)infoDictionary;
+- (id)bundleIdentifier;
+- (id)objectForInfoDictionaryKey:(id)key;
 @end
 @interface NSOutputStream : NSObject
 - (id)initToFileAtPath:(id)path append:(BOOL)append;
@@ -179,6 +186,10 @@ __attribute__((noinline)) static void setup_callbacks(int capture)
 int main(void)
 {
     id error = (id)0;
+    NSBundle *bundle = [NSBundle mainBundle];
+    if (strcmp([[bundle bundleIdentifier] UTF8String], "dev.chimera.services-fixture")) return 232;
+    if (strcmp([[[bundle infoDictionary] objectForKeyedSubscript:@"CFBundleExecutable"] UTF8String], "darwin_services")) return 233;
+    if (strcmp([[bundle objectForInfoDictionaryKey:@"CFBundleDisplayName"] UTF8String], "Independent & Generic")) return 234;
     NSFileManager *fm = [NSFileManager defaultManager];
     if (![fm createDirectoryAtPath:@"/var/mobile/Documents/services" withIntermediateDirectories:1 attributes:(id)0 error:&error] || error) return 210;
     if (![fm changeCurrentDirectoryPath:@"/var/mobile/Documents/services"]) return 211;
@@ -197,6 +208,9 @@ int main(void)
     [stream close];
     parsed = [NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:@"account.json"] options:0 error:&error];
     if (!parsed || [parsed[@"value"] integerValue] != 7) return 215;
+    if (![data writeToFile:@"account.json" options:1 error:&error] || error) return 235;
+    NSArray *names = [@[@"z", @"Beta", @"alice"] sortedArrayUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
+    if (strcmp([[names firstObject] UTF8String], "alice")) return 236;
     if (![dict writeToFile:@"prefs.plist" atomically:1]) return 216;
     parsed = [NSDictionary dictionaryWithContentsOfFile:@"prefs.plist"];
     if (!parsed || strcmp([parsed[@"unicode"] UTF8String], "中文 😀") || ![parsed[@"enabled"] boolValue]) return 217;

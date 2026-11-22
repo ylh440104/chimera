@@ -1265,22 +1265,8 @@ static double screen_scale(void *cls, const char *sel)
 
 static void *bundle_info(void *self, const char *sel)
 {
-    void *d;
-
-    (void)sel;
-    (void)self;
-    d = chm_foundation_alloc_obj("NSMutableDictionary", 64);
-    if (!d)
-        return NULL;
-    chm_objc_send2(d, "setObject:forKey:", chm_foundation_string("CMCLauncher"),
-                   chm_foundation_string("CFBundleExecutable"));
-    chm_objc_send2(d, "setObject:forKey:", chm_foundation_string("com.mojang.launcher"),
-                   chm_foundation_string("CFBundleIdentifier"));
-    chm_objc_send2(d, "setObject:forKey:", chm_foundation_string("1.0"),
-                   chm_foundation_string("CFBundleShortVersionString"));
-    chm_objc_send2(d, "setObject:forKey:", chm_foundation_string("1"),
-                   chm_foundation_string("CFBundleVersion"));
-    return d;
+    (void)self; (void)sel;
+    return chm_foundation_bundle_info();
 }
 
 int chm_ui_main(int argc, char **argv, void *principal, void *delegate_name)

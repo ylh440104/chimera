@@ -1990,38 +1990,32 @@ static void *d_data_with_file(void *cls, const char *sel, void *path)
 
 static int d_write_file(void *self, const char *sel, void *path, int atomically)
 {
-    char mapped[1024];
-
     (void)sel;
-    (void)atomically;
-    if (!fo_is_data(self))
-        return 0;
-    if (!chm_foundation_map_path(fo_bytes(path), mapped, sizeof(mapped)))
-        return 0;
-    ensure_parent(mapped);
-    {
-        int fd = open(mapped, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-        const uint8_t *p;
-        size_t left;
-        int ok = 1;
-
-        if (fd < 0)
-            return 0;
-        p = ((fo_data *)self)->bytes;
-        left = (size_t)((fo_data *)self)->length;
-        while (left) {
-            ssize_t n = write(fd, p, left);
-
-            if (n <= 0) {
-                ok = 0;
-                break;
-            }
-            p += n;
-            left -= (size_t)n;
-        }
-        close(fd);
-        return ok;
+    char mapped[2048], temporary[2080];
+    if (!fo_is_data(self) || !chm_foundation_map_path_write(fo_bytes(path), mapped, sizeof(mapped))) return 0;
+    int fd;
+    if (atomically) {
+        int n = snprintf(temporary, sizeof(temporary), "%s.XXXXXX", mapped);
+        if (n < 0 || (size_t)n >= sizeof(temporary)) return 0;
+        fd = mkstemp(temporary);
+    } else fd = open(mapped, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) return 0;
+    const uint8_t *bytes = ((fo_data *)self)->bytes;
+    size_t left = (size_t)((fo_data *)self)->length;
+    int ok = 1;
+    while (left) {
+        ssize_t n = write(fd, bytes, left);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) { ok = 0; break; }
+        bytes += n; left -= (size_t)n;
     }
+    if (atomically && fsync(fd)) ok = 0;
+    if (close(fd)) ok = 0;
+    if (atomically) {
+        if (ok && rename(temporary, mapped)) ok = 0;
+        if (!ok) unlink(temporary);
+    }
+    return ok;
 }
 
 static void *str_with_contents_of_file(void *cls, const char *sel, void *path, uint64_t enc,
@@ -2095,7 +2089,7 @@ static void *os_version(void)
 
 static void *bundle_id(void)
 {
-    return fo_string_new("com.app.chimera");
+    return d_value(chm_foundation_bundle_info(), NULL, fo_string_new("CFBundleIdentifier"));
 }
 
 #include "foundation_services.inc"
