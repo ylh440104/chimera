@@ -281,7 +281,18 @@ static ui_hit hit_at(double x, double y)
         }
         return result;
     }
-    if (chm_objc_is_kind(v->object, "UIControl") && !v->disabled) result.kind = 5;
+    if (chm_objc_is_kind(v->object, "UIControl")) {
+        if (!v->disabled) result.kind = 5;
+        return result;
+    }
+    for (ui_view *parent = v; parent; parent = parent->parent) {
+        if (parent->cell && parent->cell->index && parent->cell->selection_style) {
+            result.view = parent;
+            result.item = parent->cell->index;
+            result.kind = 6;
+            break;
+        }
+    }
     return result;
 }
 
@@ -311,6 +322,7 @@ static int pointer_body(void *context)
     if (!isfinite(p->x) || !isfinite(p->y)) { input_reset(); return 0; }
     container_layout(as_vc(g_key_window ? g_key_window->owner : NULL));
     if (g_modal) container_layout(g_modal);
+    tables_prepare(g_key_window);
     layout_dirty = 1; ui_layout();
     ui_hit hit = hit_at(p->x, p->y);
     if (p->phase == 0) {
@@ -337,8 +349,49 @@ static int pointer_body(void *context)
         return item && !item->disabled ? invoke_action(item->target, item->action, hit.item, NULL, hit.view) : 0;
     }
     if (hit.kind == 4) return nav_pop(hit.controller->object, NULL, 0) != NULL;
-    if (hit.kind == 5) return send_control_events(hit.view, 1u << 6);
+    if (hit.kind == 5) {
+        if (chm_objc_is_kind(hit.view->object, "UISwitch")) {
+            hit.view->switch_on = !hit.view->switch_on;
+            send_control_events(hit.view, 1u << 12);
+            chm_session_log(g_sess, "input: switch on=%d", hit.view->switch_on);
+            return 1;
+        }
+        return send_control_events(hit.view, 1u << 6);
+    }
+    if (hit.kind == 6) return table_select_cell(hit.view);
     return 0;
+}
+
+typedef struct { double x, y, delta; } scroll_args;
+
+static int scroll_body(void *context)
+{
+    scroll_args *p = context;
+    if (!isfinite(p->x) || !isfinite(p->y) || !isfinite(p->delta)) return 0;
+    input_reset();
+    if (!g_key_window) return 0;
+    prepare_draw(NULL);
+    ui_hit hit = hit_at(p->x, p->y);
+    for (ui_view *v = hit.view; v; v = v->parent) {
+        ui_table *t = v->table;
+        if (!t) continue;
+        double previous = t->offset;
+        t->offset = fmin(fmax(0, t->offset + p->delta), fmax(0, t->content_height - v->h));
+        table_update(v);
+        layout_dirty = 1;
+        chm_session_log(g_sess, "input: table offset=%.2f", t->offset);
+        return fabs(previous - t->offset) > 0.001;
+    }
+    return 0;
+}
+
+int chm_ui_scroll(double x, double y, double delta)
+{
+    if (!g_sess || g_sess->exit_code == -2) return -1;
+    scroll_args args = {x, y, delta};
+    int rc = chm_session_callback(g_sess, scroll_body, &args);
+    if (rc == -2) { input_reset(); g_sess->exit_code = -2; }
+    return rc;
 }
 
 int chm_ui_pointer(int phase, double x, double y)

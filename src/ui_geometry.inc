@@ -171,7 +171,8 @@ static void ui_layout(void)
             changed |= resolve_axis(v, 0, &v->x, &v->w);
             changed |= resolve_axis(v, 1, &v->y, &v->h);
         }
-        for (ui_view *v = views; v; v = v->next) if (v->background_view) table_update(v);
+        for (ui_view *v = views; v; v = v->next)
+            if (v->background_view || v->table) table_update(v);
         if (!changed) break;
     }
     if (conflict || pass == 64) chm_session_log(g_sess, "layout: conflicting or nonconvergent equalities");

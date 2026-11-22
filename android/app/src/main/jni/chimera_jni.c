@@ -129,6 +129,14 @@ JNIEXPORT jint JNICALL Java_dev_chimera_app_Native_tap(JNIEnv *env, jclass cls,
     return rc;
 }
 
+JNIEXPORT jint JNICALL Java_dev_chimera_app_Native_scroll(JNIEnv *env, jclass cls,
+    jdouble x, jdouble y, jdouble delta)
+{
+    (void)env; (void)cls;
+    if (!g_session || !chm_ui_running() || g_session->exit_code != 0) return -1;
+    return chm_ui_scroll(x, y, delta);
+}
+
 JNIEXPORT jboolean JNICALL Java_dev_chimera_app_Native_ready(JNIEnv *env, jclass cls)
 {
     (void)env;

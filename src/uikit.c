@@ -53,7 +53,50 @@ typedef struct ui_view {
     int disabled;
     int highlighted;
     ui_action *actions;
+    int switch_on;
+    struct ui_table *table;
+    struct ui_cell *cell;
 } ui_view;
+
+typedef struct ui_index {
+    void *object;
+    long section, row;
+    struct ui_index *next;
+} ui_index;
+
+typedef struct {
+    ui_view *view;
+    void *index;
+    double top, height;
+    int header;
+} ui_row;
+
+typedef struct ui_table {
+    ui_view *view;
+    ui_row *rows;
+    size_t count, capacity;
+    long sections;
+    long *row_counts;
+    double row_height, offset, content_height;
+    int dirty, loading;
+    ui_view *selected;
+} ui_table;
+
+typedef struct ui_cell {
+    ui_view *view;
+    void *content, *label, *detail, *accessory, *reuse;
+    long style, accessory_type, selection_style;
+    int selected;
+    ui_table *table;
+    void *index;
+} ui_cell;
+
+static ui_index *indexes;
+static void table_reload(void *self, const char *sel);
+static void tables_prepare(ui_view *root);
+static int table_select_cell(ui_view *view);
+static ui_table *table_state(void *object);
+static void tables_shutdown(void);
 
 typedef struct ui_vc {
     void *object;
@@ -1464,6 +1507,7 @@ void chm_ui_shutdown(chm_session *s)
     if (!s || s != g_sess) return;
     input_reset();
     g_modal = NULL;
+    tables_shutdown();
     while (views) {
         ui_view *next = views->next;
         free(views->kids);

@@ -1,12 +1,10 @@
 package dev.chimera.app
 
-import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
-import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -20,7 +18,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var openButton: Button
     private lateinit var runButton: Button
     private lateinit var frameView: GuestImageView
-    private var bitmap: Bitmap? = null
+    private var frame: GuestFrame? = null
     private var busy = false
     private var ready = false
     private var executed = false
@@ -47,9 +45,15 @@ class MainActivity : AppCompatActivity() {
         }
         frameView = GuestImageView(this).apply {
             contentDescription = "客机画面"
-            scaleType = ImageView.ScaleType.FIT_CENTER
             visibility = View.GONE
             onGuestTap = { from, to -> tapGuest(from.x, from.y, to.x, to.y) }
+            onGuestScroll = { from, delta -> scrollGuest(from.x, from.y, delta) }
+            onBackend = { hardware ->
+                log(if (hardware) "屏幕绘制：GPU 硬件 Canvas" else "屏幕绘制：软件 Canvas")
+                Native.executor.execute {
+                    File(filesDir, "render-backend.txt").writeText("hardwareCanvas=$hardware\nbitmapRaster=false\n")
+                }
+            }
         }
         logView = TextView(this).apply {
             textSize = 11f
@@ -78,7 +82,7 @@ class MainActivity : AppCompatActivity() {
     private fun buttons() {
         openButton.isEnabled = !busy
         runButton.isEnabled = !busy && ready && !executed
-        frameView.acceptInput = !closed && !busy && guestLive && bitmap != null
+        frameView.acceptInput = !closed && !busy && guestLive && frameView.hasFrame
     }
 
     private fun importAndLoad(uri: Uri) {
@@ -88,10 +92,9 @@ class MainActivity : AppCompatActivity() {
         executed = false
         guestLive = false
         buttons()
-        frameView.setImageDrawable(null)
+        frameView.submitFrame(null)
         frameView.visibility = View.GONE
-        bitmap?.recycle()
-        bitmap = null
+        frame = null
         logView.text = ""
         Native.executor.execute {
             var loaded = false
@@ -196,32 +199,35 @@ class MainActivity : AppCompatActivity() {
 
     private fun drawGuestFrame(): Boolean {
         val painter = FramePainter(720, 1280)
-        var handedOff = false
-        try {
-            if (!Native.paint(painter, 720, 1280)) return false
-            File(filesDir, "last-frame.png").outputStream().use {
-                check(painter.bitmap.compress(Bitmap.CompressFormat.PNG, 100, it))
+        if (!Native.paint(painter, 720, 1280)) return false
+        val next = painter.finish()
+        File(filesDir, "last-frame-texts.txt").writeText(next.texts.joinToString("\n"))
+        log("提交画面：${next.rectangles} 个色块，${next.texts.size} 条文字")
+        runOnUiThread {
+            if (!closed) {
+                frame = next
+                frameView.submitFrame(next)
+                frameView.visibility = View.VISIBLE
+                guestLive = true
+                buttons()
             }
-            File(filesDir, "last-frame-texts.txt").writeText(painter.texts.joinToString("\n"))
-            log("重绘：${painter.rectangles} 个色块，${painter.texts.size} 条文字")
-            runOnUiThread {
-                if (closed) painter.bitmap.recycle()
-                else {
-                    bitmap = painter.bitmap
-                    frameView.setImageBitmap(painter.bitmap)
-                    frameView.visibility = View.VISIBLE
-                    guestLive = true
-                    buttons()
-                }
-            }
-            handedOff = true
-            return true
-        } finally {
-            if (!handedOff) painter.bitmap.recycle()
         }
+        return true
     }
 
     private fun tapGuest(downX: Float, downY: Float, upX: Float, upY: Float) {
+        interactGuest("点击客机 (${upX.toInt()}, ${upY.toInt()})") {
+            Native.tap(downX.toDouble(), downY.toDouble(), upX.toDouble(), upY.toDouble())
+        }
+    }
+
+    private fun scrollGuest(x: Float, y: Float, delta: Float) {
+        interactGuest("滚动客机 ${delta.toInt()}") {
+            Native.scroll(x.toDouble(), y.toDouble(), delta.toDouble())
+        }
+    }
+
+    private fun interactGuest(label: String, action: () -> Int) {
         if (closed || busy || !guestLive) return
         busy = true
         buttons()
@@ -229,8 +235,8 @@ class MainActivity : AppCompatActivity() {
             var healthy = true
             try {
                 if (!closed) {
-                    val rc = Native.tap(downX.toDouble(), downY.toDouble(), upX.toDouble(), upY.toDouble())
-                    log("点击客机 (${upX.toInt()}, ${upY.toInt()})，结果 $rc")
+                    val rc = action()
+                    log("$label，结果 $rc")
                     check(rc >= 0) { "点击回调异常，已停止输入；重新导入可重建会话" }
                     val pumped = Native.pump()
                     check(pumped >= 0) { "客机队列异常，已停止输入" }
@@ -264,9 +270,8 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         closed = true
         Native.executor.execute { Native.release() }
-        frameView.setImageDrawable(null)
-        bitmap?.recycle()
-        bitmap = null
+        frameView.submitFrame(null)
+        frame = null
         super.onDestroy()
     }
 

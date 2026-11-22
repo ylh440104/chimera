@@ -1,21 +1,13 @@
+#include "ui_table.inc"
+
 static void *table_init(void *self, const char *sel, ui_rect rect, long style)
 {
     if (!chm_objc_is_kind(self, "UITableView")) return NULL;
-    if (!v_init_frame(self, sel, rect)) return NULL;
+    if (!v_init_frame(self, sel, rect) || !table_state(self)) return NULL;
     ui_view *v = as_view(self);
     v->clips = 1;
     v->bg = style ? 0xff1c1c1eu : 0xff000000u;
     return self;
-}
-
-static void table_update(ui_view *table)
-{
-    ui_view *background = as_view(table->background_view);
-    if (!background || background->parent != table) return;
-    background->x = 0;
-    background->y = 0;
-    background->w = table->w;
-    background->h = table->h;
 }
 
 static void table_set_background(void *self, const char *sel, void *object)
@@ -45,8 +37,8 @@ static void *table_background(void *self, const char *sel)
 static void table_set_source(void *self, const char *sel, void *source)
 {
     (void)sel;
-    ui_view *v = as_view(self);
-    if (v) v->data_source = source;
+    ui_table *t = table_state(self);
+    if (t) { t->view->data_source = source; t->dirty = 1; }
 }
 
 static void *table_source(void *self, const char *sel)
@@ -54,26 +46,6 @@ static void *table_source(void *self, const char *sel)
     (void)sel;
     ui_view *v = as_view(self);
     return v ? v->data_source : NULL;
-}
-
-static void table_reload(void *self, const char *sel)
-{
-    (void)sel;
-    ui_view *v = as_view(self);
-    if (!v || !chm_objc_is_kind(self, "UITableView")) return;
-    long (*sections)(void *, const char *, void *) = chm_objc_find_imp(v->data_source, "numberOfSectionsInTableView:");
-    long (*rows)(void *, const char *, void *, long) = chm_objc_find_imp(v->data_source, "tableView:numberOfRowsInSection:");
-    long n = sections ? sections(v->data_source, "numberOfSectionsInTableView:", self) : 1;
-    long total = 0;
-    if (n < 0 || n > 4096) { chm_session_log(g_sess, "ui: invalid table section count"); return; }
-    for (long i = 0; rows && i < n; ++i) {
-        long count = rows(v->data_source, "tableView:numberOfRowsInSection:", self, i);
-        if (count < 0 || count > 1000000 || total > LONG_MAX - count) return;
-        total += count;
-    }
-    if (total) chm_session_log(g_sess, "ui: table rows=%ld, cell rendering not implemented", total);
-    table_update(v);
-    layout_dirty = 1;
 }
 
 static void v_set_translates(void *self, const char *sel, signed char flag)

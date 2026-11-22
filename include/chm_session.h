@@ -167,5 +167,6 @@ int chm_ui_paint(chm_draw_fn draw, void *context, int width, int height);
 int chm_ui_render(uint32_t *buf, int bw, int bh);
 int chm_ui_view_count(void);
 int chm_ui_pointer(int phase, double x, double y);
+int chm_ui_scroll(double x, double y, double delta);
 
 #endif

@@ -70,8 +70,34 @@ static void paint_view(chm_draw_fn draw, void *context, ui_view *v, double px, d
     chm_draw_command c = {0};
     c.x = px + v->x; c.y = py + v->y; c.width = v->w; c.height = v->h;
     c.clip_left = left; c.clip_top = top; c.clip_right = right; c.clip_bottom = bottom;
-    c.color = paint_color(v->bg, alpha);
+    c.color = paint_color(v->cell && v->cell->selected ? 0xff48484au : v->bg, alpha);
     if (v->w > 0 && v->h > 0 && (c.color >> 24)) draw(context, &c);
+    if (v->cell && v->w > 0 && v->h > 0) {
+        chm_draw_command separator = c;
+        separator.x += 16; separator.y += v->h - 1;
+        separator.width = fmax(0, v->w - 16); separator.height = 1;
+        separator.color = paint_color(0xff48484au, alpha);
+        draw(context, &separator);
+        if (!v->cell->accessory && v->cell->accessory_type) {
+            chm_draw_command marker = c;
+            marker.x += fmax(0, v->w - 40); marker.width = fmin(32, v->w);
+            emit_text(draw, context, &marker, v->cell->accessory_type == 3 ? "✓" : "›", 22, 1, 1,
+                      paint_color(0xffb3b3bdu, alpha));
+        }
+    }
+    if (chm_objc_is_kind(v->object, "UISwitch") && v->w > 0 && v->h > 0) {
+        chm_draw_command track = c;
+        double opacity = alpha * (v->disabled ? 0.4 : 1);
+        track.kind = 2;
+        track.color = paint_color(v->switch_on ? 0xff30d158u : 0xff55555au, opacity);
+        draw(context, &track);
+        double diameter = fmax(0, fmin(v->h - 4, v->w - 4));
+        track.x += v->switch_on ? v->w - diameter - 2 : 2;
+        track.y += (v->h - diameter) / 2;
+        track.width = track.height = diameter;
+        track.color = paint_color(0xffffffffu, opacity);
+        draw(context, &track);
+    }
     if (chm_objc_is_kind(v->object, "UIProgressView") && v->w > 0 && v->h > 0) {
         c.color = paint_color(0xff55555au, alpha); draw(context, &c);
         c.width *= v->progress;
@@ -89,14 +115,24 @@ static void paint_view(chm_draw_fn draw, void *context, ui_view *v, double px, d
         paint_view(draw, context, v->kids[i], c.x, c.y, left, top, right, bottom, alpha, depth + 1);
 }
 
+static int prepare_draw(void *context)
+{
+    (void)context;
+    container_layout(as_vc(g_key_window->owner));
+    for (ui_vc *modal = g_modal; modal; modal = modal->previous_modal) container_layout(modal);
+    tables_prepare(g_key_window);
+    layout_dirty = 1;
+    ui_layout();
+    return 1;
+}
+
 int chm_ui_paint(chm_draw_fn draw, void *context, int width, int height)
 {
     if (!draw || width <= 0 || height <= 0 || width > 16384 || height > 16384) return -1;
-    if (!g_key_window) return 0;
-    container_layout(as_vc(g_key_window->owner));
-    for (ui_vc *modal = g_modal; modal; modal = modal->previous_modal) container_layout(modal);
-    layout_dirty = 1;
-    ui_layout();
+    if (!g_key_window || !g_sess) return 0;
+    if (g_sess->exit_code == -2) return -2;
+    int rc = chm_session_callback(g_sess, prepare_draw, NULL);
+    if (rc < 0) { if (rc == -2) g_sess->exit_code = -2; return rc; }
     paint_view(draw, context, g_key_window, 0, 0, 0, 0, width, height, 1, 0);
     return 1;
 }
