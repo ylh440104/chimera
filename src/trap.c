@@ -12,19 +12,19 @@
 
 #define CHM_ALTSTACK 65536
 
-static sigjmp_buf g_jump;
-static sigjmp_buf g_probe_jump;
-static volatile sig_atomic_t g_probing;
-static volatile sig_atomic_t g_armed;
-static char g_altstack[CHM_ALTSTACK];
-static char g_fault[512];
-static uint64_t g_pc;
-static uint64_t g_fp;
-static uint64_t g_lr;
-static uint64_t g_sp;
-static uint64_t g_far;
-static int g_signal;
-static int g_installed;
+static _Thread_local sigjmp_buf g_jump;
+static _Thread_local sigjmp_buf g_probe_jump;
+static _Thread_local volatile sig_atomic_t g_probing;
+static _Thread_local volatile sig_atomic_t g_armed;
+static _Thread_local char g_altstack[CHM_ALTSTACK];
+static _Thread_local char g_fault[512];
+static _Thread_local uint64_t g_pc;
+static _Thread_local uint64_t g_fp;
+static _Thread_local uint64_t g_lr;
+static _Thread_local uint64_t g_sp;
+static _Thread_local uint64_t g_far;
+static _Thread_local int g_signal;
+static _Thread_local int g_installed;
 
 static void handler(int sig, siginfo_t *info, void *ctx)
 {
@@ -69,6 +69,7 @@ void chm_trap_install(void)
     sigaction(SIGILL, &sa, NULL);
     sigaction(SIGFPE, &sa, NULL);
     sigaction(SIGABRT, &sa, NULL);
+    sigaction(SIGTRAP, &sa, NULL);
     ss.ss_sp = g_altstack;
     ss.ss_size = sizeof(g_altstack);
     ss.ss_flags = 0;
@@ -80,14 +81,12 @@ typedef struct {
     chm_image *img;
     int argc;
     char **argv;
-    int rc;
 } run_args;
 
-static void run_body(void *p)
+static int run_body(void *p)
 {
     run_args *a = p;
-
-    a->rc = chm_run(a->img, a->argc, a->argv);
+    return chm_run(a->img, a->argc, a->argv);
 }
 
 static int probe_read(uint64_t addr, uint64_t *out)
@@ -196,22 +195,22 @@ static void describe_pc(chm_session *s, uint64_t pc)
 
 int chm_session_execute(chm_session *s, chm_image *img, int argc, char **argv)
 {
-    run_args a;
+    run_args a = {img, argc, argv};
+    return chm_session_callback(s, run_body, &a);
+}
 
+int chm_session_callback(chm_session *s, int (*body)(void *), void *context)
+{
+    if (!s || !body) return -1;
     chm_trap_install();
-    a.img = img;
-    a.argc = argc;
-    a.argv = argv;
-    a.rc = -1;
+    if (g_armed) return body(context);
     g_pc = g_lr = g_sp = g_far = g_fp = 0;
     g_signal = 0;
-    g_armed = 1;
     if (sigsetjmp(g_jump, 1) == 0) {
-        run_args *arg = &a;
-
-        run_body(arg);
+        g_armed = 1;
+        int rc = body(context);
         g_armed = 0;
-        return a.rc;
+        return rc;
     }
     g_armed = 0;
     {

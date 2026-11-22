@@ -101,11 +101,32 @@ JNIEXPORT jstring JNICALL Java_dev_chimera_app_Native_report(JNIEnv *env, jclass
     return (*env)->NewStringUTF(env, out);
 }
 
+static int pump_body(void *context)
+{
+    return (int)chm_dispatch_pump(context);
+}
+
 JNIEXPORT jint JNICALL Java_dev_chimera_app_Native_pump(JNIEnv *env, jclass cls)
 {
     (void)env;
     (void)cls;
-    return (jint)chm_dispatch_pump(g_session);
+    if (!g_session || g_session->exit_code == -2) return -1;
+    int rc = chm_session_callback(g_session, pump_body, g_session);
+    if (rc == -2) g_session->exit_code = -2;
+    return rc;
+}
+
+JNIEXPORT jint JNICALL Java_dev_chimera_app_Native_tap(JNIEnv *env, jclass cls,
+    jdouble down_x, jdouble down_y, jdouble up_x, jdouble up_y)
+{
+    (void)env;
+    (void)cls;
+    if (!g_session || !chm_ui_running() || g_session->exit_code != 0) return -1;
+    int down = chm_ui_pointer(0, down_x, down_y);
+    if (down < 0) return down;
+    int rc = chm_ui_pointer(2, up_x, up_y);
+    chm_session_log(g_session, "input: tap (%.2f,%.2f) result=%d", up_x, up_y, rc);
+    return rc;
 }
 
 JNIEXPORT jboolean JNICALL Java_dev_chimera_app_Native_ready(JNIEnv *env, jclass cls)

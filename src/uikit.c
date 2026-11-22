@@ -10,6 +10,13 @@
 
 typedef struct { double x, y, w, h; } ui_rect;
 
+typedef struct ui_action {
+    void *target;
+    const char *selector;
+    uint64_t events;
+    struct ui_action *next;
+} ui_action;
+
 typedef struct ui_view {
     void *object;
     struct ui_view *next;
@@ -42,6 +49,10 @@ typedef struct ui_view {
     double progress;
     unsigned goal_mask;
     double goals[8];
+    int interactive;
+    int disabled;
+    int highlighted;
+    ui_action *actions;
 } ui_view;
 
 typedef struct ui_vc {
@@ -63,7 +74,11 @@ typedef struct ui_vc {
     int syncing;
     int appeared;
     int bar_hidden;
+    struct ui_vc *presenting;
+    struct ui_vc *previous_modal;
 } ui_vc;
+
+static ui_vc *g_modal;
 
 typedef struct ui_item {
     void *object;
@@ -76,6 +91,7 @@ typedef struct ui_item {
     void *left_item;
     void *target;
     const char *action;
+    int disabled;
     uint32_t background;
     struct ui_item *next;
 } ui_item;
@@ -171,6 +187,7 @@ static ui_view *as_view(void *p)
     v->text_color = 0xffffffffu;
     v->number_of_lines = 1;
     v->translates = 1;
+    v->interactive = !chm_objc_is_kind(p, "UILabel") && !chm_objc_is_kind(p, "UIImageView");
     v->next = views;
     views = v;
     return v;
@@ -926,35 +943,69 @@ static void container_set_array_animated(void *self, const char *sel, void *arra
     container_set_array(self, sel, array);
 }
 
+static void complete_transition(void *block)
+{
+    if (!block) return;
+    struct { void *isa; int flags, reserved; void (*invoke)(void *); } *b = block;
+    if (b->invoke) b->invoke(block);
+}
+
 static void wc_present(void *self, const char *sel, void *other, int animated, void *done)
 {
-    ui_vc *vc = as_vc(self);
-    void *child;
-
     (void)sel;
-    (void)animated;
-    (void)done;
-    if (!vc || !other)
-        return;
+    ui_vc *vc = as_vc(self), *next = as_vc(other);
+    if (!g_key_window || !vc || !next || vc == next || vc->presented || next->parent || next->presenting) return;
+    for (ui_vc *p = vc; p; p = p->parent) if (p == next) return;
+    ui_view *child = as_view(chm_objc_send0(other, "view"));
+    if (!child || !view_add(g_key_window, child)) return;
+    child->x = child->y = 0;
+    child->w = g_key_window->w;
+    child->h = g_key_window->h;
+    next->previous_modal = g_modal;
+    next->presenting = vc;
     vc->presented = other;
-    child = chm_objc_send0(other, "view");
-    if (child && g_key_window)
-        view_add(g_key_window, as_view(child));
+    controller_appearance(g_modal ? g_modal : as_vc(g_key_window->owner), 0, animated);
+    g_modal = next;
+    container_layout(next);
+    layout_dirty = 1;
+    controller_appearance(next, 1, animated);
+    chm_session_log(g_sess, "ui: presented %s", chm_objc_class_name(*(void **)other));
+    complete_transition(done);
 }
 
 static void wc_dismiss(void *self, const char *sel, int animated, void *done)
 {
-    ui_vc *vc = as_vc(self);
-    void *child;
-
     (void)sel;
-    (void)animated;
-    (void)done;
-    if (!vc || !vc->presented)
-        return;
-    child = chm_objc_send0(vc->presented, "view");
-    view_remove(as_view(child));
-    vc->presented = NULL;
+    ui_vc *vc = as_vc(self);
+    if (!vc) return;
+    ui_vc *wanted = vc->presented ? as_vc(vc->presented) : vc;
+    while (wanted && !wanted->presenting) wanted = wanted->parent;
+    if (!wanted) return;
+    ui_vc *scan = g_modal;
+    while (scan && scan != wanted) scan = scan->previous_modal;
+    if (!scan) return;
+    for (;;) {
+        ui_vc *top = g_modal;
+        controller_appearance(top, 0, animated);
+        view_remove(as_view(top->view));
+        if (top->presenting) top->presenting->presented = NULL;
+        top->presenting = NULL;
+        g_modal = top->previous_modal;
+        top->previous_modal = NULL;
+        if (top == wanted) break;
+    }
+    controller_appearance(g_modal ? g_modal : as_vc(g_key_window->owner), 1, animated);
+    layout_dirty = 1;
+    chm_session_log(g_sess, "ui: dismissed modal");
+    complete_transition(done);
+}
+
+static void *wc_presenting(void *self, const char *sel)
+{
+    (void)sel;
+    for (ui_vc *vc = as_vc(self); vc; vc = vc->parent)
+        if (vc->presenting) return vc->presenting->object;
+    return NULL;
 }
 
 static void *wc_presented(void *self, const char *sel)
@@ -1304,12 +1355,14 @@ int chm_ui_view_count(void)
 }
 
 #include "ui_widgets.inc"
+#include "ui_input.inc"
 
 static const struct {
     const char *sel;
     void *imp;
 } g_ui_methods[] = {
 #include "ui_widget_methods.inc"
+#include "ui_input_methods.inc"
     { "initWithRootViewController:", (void *)nav_init_root },
     { "viewControllers", (void *)container_children },
     { "childViewControllers", (void *)container_children },
@@ -1409,9 +1462,17 @@ static const struct {
 void chm_ui_shutdown(chm_session *s)
 {
     if (!s || s != g_sess) return;
+    input_reset();
+    g_modal = NULL;
     while (views) {
         ui_view *next = views->next;
         free(views->kids);
+        while (views->actions) {
+            ui_action *next_action = views->actions->next;
+            free((void *)views->actions->selector);
+            free(views->actions);
+            views->actions = next_action;
+        }
         free(views->text);
         free(views);
         views = next;

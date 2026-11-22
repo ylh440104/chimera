@@ -19,11 +19,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var logView: TextView
     private lateinit var openButton: Button
     private lateinit var runButton: Button
-    private lateinit var frameView: ImageView
+    private lateinit var frameView: GuestImageView
     private var bitmap: Bitmap? = null
     private var busy = false
     private var ready = false
     private var executed = false
+    private var guestLive = false
     @Volatile private var closed = false
 
     private val picker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
@@ -44,10 +45,11 @@ class MainActivity : AppCompatActivity() {
             isEnabled = false
             setOnClickListener { runLoaded() }
         }
-        frameView = ImageView(this).apply {
-            contentDescription = "客机首帧预览"
+        frameView = GuestImageView(this).apply {
+            contentDescription = "客机画面"
             scaleType = ImageView.ScaleType.FIT_CENTER
             visibility = View.GONE
+            onGuestTap = { from, to -> tapGuest(from.x, from.y, to.x, to.y) }
         }
         logView = TextView(this).apply {
             textSize = 11f
@@ -76,6 +78,7 @@ class MainActivity : AppCompatActivity() {
     private fun buttons() {
         openButton.isEnabled = !busy
         runButton.isEnabled = !busy && ready && !executed
+        frameView.acceptInput = !closed && !busy && guestLive && bitmap != null
     }
 
     private fun importAndLoad(uri: Uri) {
@@ -83,6 +86,7 @@ class MainActivity : AppCompatActivity() {
         busy = true
         ready = false
         executed = false
+        guestLive = false
         buttons()
         frameView.setImageDrawable(null)
         frameView.visibility = View.GONE
@@ -174,29 +178,9 @@ class MainActivity : AppCompatActivity() {
                     log(result)
                     if (result == "entry returned 0") {
                         val pumped = Native.pump()
+                        check(pumped >= 0) { "客机队列异常，重新导入后再运行" }
                         if (pumped > 0) log("主队列执行 $pumped 个 block")
-                        val painter = FramePainter(720, 1280)
-                        var handedOff = false
-                        try {
-                            if (Native.paint(painter, 720, 1280)) {
-                                File(filesDir, "last-frame.png").outputStream().use {
-                                    check(painter.bitmap.compress(Bitmap.CompressFormat.PNG, 100, it))
-                                }
-                                File(filesDir, "last-frame-texts.txt").writeText(painter.texts.joinToString("\n"))
-                                log("绘制完成：${painter.rectangles} 个色块，${painter.texts.size} 条文字；已保存 last-frame.png")
-                                runOnUiThread {
-                                    if (closed) painter.bitmap.recycle()
-                                    else {
-                                        bitmap = painter.bitmap
-                                        frameView.setImageBitmap(painter.bitmap)
-                                        frameView.visibility = View.VISIBLE
-                                    }
-                                }
-                                handedOff = true
-                            } else log("没有可绘制的客机窗口")
-                        } finally {
-                            if (!handedOff) painter.bitmap.recycle()
-                        }
+                        check(drawGuestFrame()) { "没有可绘制的客机窗口" }
                     }
                     log(Native.report())
                 }
@@ -205,6 +189,73 @@ class MainActivity : AppCompatActivity() {
             } finally {
                 runOnUiThread {
                     if (!closed) { busy = false; buttons() }
+                }
+            }
+        }
+    }
+
+    private fun drawGuestFrame(): Boolean {
+        val painter = FramePainter(720, 1280)
+        var handedOff = false
+        try {
+            if (!Native.paint(painter, 720, 1280)) return false
+            File(filesDir, "last-frame.png").outputStream().use {
+                check(painter.bitmap.compress(Bitmap.CompressFormat.PNG, 100, it))
+            }
+            File(filesDir, "last-frame-texts.txt").writeText(painter.texts.joinToString("\n"))
+            log("重绘：${painter.rectangles} 个色块，${painter.texts.size} 条文字")
+            runOnUiThread {
+                if (closed) painter.bitmap.recycle()
+                else {
+                    bitmap = painter.bitmap
+                    frameView.setImageBitmap(painter.bitmap)
+                    frameView.visibility = View.VISIBLE
+                    guestLive = true
+                    buttons()
+                }
+            }
+            handedOff = true
+            return true
+        } finally {
+            if (!handedOff) painter.bitmap.recycle()
+        }
+    }
+
+    private fun tapGuest(downX: Float, downY: Float, upX: Float, upY: Float) {
+        if (closed || busy || !guestLive) return
+        busy = true
+        buttons()
+        Native.executor.execute {
+            var healthy = true
+            try {
+                if (!closed) {
+                    val rc = Native.tap(downX.toDouble(), downY.toDouble(), upX.toDouble(), upY.toDouble())
+                    log("点击客机 (${upX.toInt()}, ${upY.toInt()})，结果 $rc")
+                    check(rc >= 0) { "点击回调异常，已停止输入；重新导入可重建会话" }
+                    val pumped = Native.pump()
+                    check(pumped >= 0) { "客机队列异常，已停止输入" }
+                    check(drawGuestFrame()) { "点击后没有可绘制窗口" }
+                }
+            } catch (e: Exception) {
+                healthy = false
+                log("交互异常：$e")
+            } finally {
+                try {
+                    if (!closed) {
+                        val report = Native.report()
+                        File(filesDir, "last-report.txt").writeText(report)
+                        if (!healthy) log(report)
+                    }
+                } catch (e: Exception) {
+                    log("保存诊断失败：$e")
+                }
+                val ok = healthy
+                runOnUiThread {
+                    if (!closed) {
+                        if (!ok) guestLive = false
+                        busy = false
+                        buttons()
+                    }
                 }
             }
         }

@@ -46,13 +46,14 @@ static void paint_bar(chm_draw_fn draw, void *context, ui_view *bar, const chm_d
             label.x += 48;
             label.width = fmax(0, label.width - 96);
             emit_text(draw, context, &label, chm_foundation_cstr(title), 17, 1, 1, paint_color(0xffffffffu, alpha));
-            for (int right = 0; item && right < 2; right++) {
-                void *button = right ? item->right_item : item->left_item;
+            for (int right = 0; right < 2; right++) {
+                void *button = item ? (right ? item->right_item : item->left_item) : NULL;
                 ui_item *b = button ? item_state(button) : NULL;
                 label = *box;
                 label.width = fmin(48, box->width);
                 if (right) label.x += box->width - label.width;
-                if (b) emit_text(draw, context, &label, chm_foundation_cstr(b->title), 22, 1, 1, paint_color(0xff007affu, alpha));
+                if (b) emit_text(draw, context, &label, chm_foundation_cstr(b->title), 22, 1, 1, paint_color(b->disabled ? 0xff666666u : 0xff007affu, alpha));
+                else if (!right && vc->child_count > 1) emit_text(draw, context, &label, "‹", 26, 1, 1, paint_color(0xff007affu, alpha));
             }
         }
         break;
@@ -93,6 +94,7 @@ int chm_ui_paint(chm_draw_fn draw, void *context, int width, int height)
     if (!draw || width <= 0 || height <= 0 || width > 16384 || height > 16384) return -1;
     if (!g_key_window) return 0;
     container_layout(as_vc(g_key_window->owner));
+    for (ui_vc *modal = g_modal; modal; modal = modal->previous_modal) container_layout(modal);
     layout_dirty = 1;
     ui_layout();
     paint_view(draw, context, g_key_window, 0, 0, 0, 0, width, height, 1, 0);

@@ -141,6 +141,7 @@ int chm_frameworks_count(void);
 
 void chm_trap_install(void);
 int chm_session_execute(chm_session *s, chm_image *img, int argc, char **argv);
+int chm_session_callback(chm_session *s, int (*body)(void *), void *context);
 uint64_t chm_trap_pc(void);
 uint64_t chm_trap_lr(void);
 int chm_trap_signal(void);
@@ -165,5 +166,6 @@ typedef void (*chm_draw_fn)(void *context, const chm_draw_command *command);
 int chm_ui_paint(chm_draw_fn draw, void *context, int width, int height);
 int chm_ui_render(uint32_t *buf, int bw, int bh);
 int chm_ui_view_count(void);
+int chm_ui_pointer(int phase, double x, double y);
 
 #endif

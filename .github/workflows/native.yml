@@ -59,6 +59,7 @@ jobs:
           for tool in chmdump chmdemand chimera_run; do
             cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -Iinclude -Ithird_party/yxml -o "$tool" "tools/$tool.c" $SRC -lm -ldl
           done
+          cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -Iinclude -Ithird_party/yxml -o test_input tests/test_input.c $SRC -lm -ldl
           ./chmdump tests/fixture.ios > dump.txt
           head -3 dump.txt
           rc=0
@@ -73,6 +74,11 @@ jobs:
             sudo apt-get install -y clang-18 lld-18
           fi
           CHM_TEST_EXPORT="$PWD/abi-results" sh tests/run_darwin_abi.sh "$PWD/chimera_run"
+          clang-18 -target arm64-apple-ios15.0 -O2 -fblocks -fno-objc-arc -fno-builtin -fno-stack-protector -c tests/darwin_input.m -o abi-results/darwin_input.o
+          ld64.lld-18 -arch arm64 -platform_version ios 15.0 15.0 -e _main -fixup_chains -exported_symbol _input_check -undefined dynamic_lookup -o abi-results/darwin_input abi-results/darwin_input.o
+          mkdir -p abi-results/input-root
+          CHM_SANDBOX_ROOT="$PWD/abi-results/input-root" timeout 30 ./test_input "$PWD/abi-results/darwin_input" > abi-results/input.log 2>&1 || { cat abi-results/input.log; exit 1; }
+          cat abi-results/input.log
 
       - uses: actions/upload-artifact@v4
         with:
@@ -85,6 +91,8 @@ jobs:
             abi-results/container-*.log
             abi-results/layout.jsonl
             abi-results/darwin_layout.log
+            abi-results/input.log
+            abi-results/darwin_input
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
@@ -97,4 +105,5 @@ jobs:
             test_fixups
             test_reject
             test_format
+            test_input
           if-no-files-found: error

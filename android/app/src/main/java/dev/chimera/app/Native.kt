@@ -29,6 +29,9 @@ class Native {
         external fun paint(target: FramePainter, width: Int, height: Int): Boolean
 
         @JvmStatic
+        external fun tap(downX: Double, downY: Double, upX: Double, upY: Double): Int
+
+        @JvmStatic
         external fun release()
     }
 }
