@@ -333,13 +333,13 @@ int chm_fprintf_list(FILE *stream, const char *fmt, const void *slots)
 
 int chm_printf_list(const char *fmt, const void *slots)
 {
-    return chm_fprintf_list(stdout, fmt, slots);
+    return chm_fprintf_list(guest_stdout, fmt, slots);
 }
 
 static int stream_close_impl(FILE *stream)
 {
     int fd = output_number(stream);
-    return fd >= 0 ? io_close(fd) : fclose(stream);
+    return fd >= 0 ? chm_io_close_number(fd) : fclose(stream);
 }
 
 static size_t fwrite_impl(const void *p, size_t size, size_t count, FILE *stream)
@@ -428,7 +428,7 @@ static int fdopen_impl(int guest_fd, const char *mode, FILE **stream)
     if (duplicate < 0) return -1;
     FILE *opened = fdopen(duplicate, mode);
     if (!opened) { close(duplicate); return -1; }
-    if (guest_fd > STDERR_FILENO && io_track(guest_fd, duplicate, NULL, 0)) {
+    if (guest_fd > STDERR_FILENO && chm_io_remap(guest_fd, duplicate, 0) < 0) {
         fclose(opened);
         return -1;
     }

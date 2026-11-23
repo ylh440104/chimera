@@ -92,7 +92,11 @@ jobs:
           cp tests/services-info.plist abi-results/Info.plist
           mkdir -p abi-results/en.lproj
           cp tests/Localizable.strings abi-results/en.lproj/Localizable.strings
-          CHM_SANDBOX_ROOT="$PWD/abi-results/services-root" timeout 30 ./test_services "$PWD/abi-results/darwin_services" > abi-results/services.log 2>&1 || { cat abi-results/services.log; exit 1; }
+          mkdir -p abi-results/services-bundle/en.lproj
+          cp tests/services-info.plist abi-results/services-bundle/Info.plist
+          cp tests/Localizable.strings abi-results/services-bundle/en.lproj/Localizable.strings
+          cp abi-results/darwin_services abi-results/services-bundle/darwin_services
+          CHM_SANDBOX_ROOT="$PWD/abi-results/services-root" timeout 30 ./test_services "$PWD/abi-results/services-bundle/darwin_services" > abi-results/services.log 2>&1 || { cat abi-results/services.log; exit 1; }
           cat abi-results/services.log
           clang-18 -target arm64-apple-ios15.0 -O2 -fblocks -fno-objc-arc -fno-builtin -fno-stack-protector -c tests/darwin_startup.m -o abi-results/darwin_startup.o
           ld64.lld-18 -arch arm64 -platform_version ios 15.0 15.0 -e _main -fixup_chains -exported_symbol _startup_state -undefined dynamic_lookup -o abi-results/darwin_startup abi-results/darwin_startup.o
