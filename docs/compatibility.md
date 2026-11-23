@@ -20,6 +20,10 @@ Android 使用硬件加速 View Canvas 重放绘制指令，不再通过 Canvas(
 
 ## 验收证据
 
+提交 `c5e90e9` 的客机测试在手指上移 100 点、尚未抬起时检查目标行及图标，再点选该行核对回调。Android 测试覆盖拖动中替换显示帧、合并 MOVE、着色与裁剪。文件测试通过 Documents URL 写入 10 字节，用相对路径和文件 URL 分别读回，并检查文件大小、权限与修改时间。[原生回归](https://github.com/ylh440104/chimera/actions/runs/45108042738) · [Android 测试与签名构建](https://github.com/ylh440104/chimera/actions/runs/45108042723)
+
+以相同的 CMCLauncher 主程序、libAFNetworking 和 UnzipKit 分别运行两个版本的 `chmdemand`。对比 CSV 的 `symbol` 列，`8c452ae` 有 113 个不同的未解析符号，`c5e90e9` 有 84 个，减少 29 个，新增 0 个。这项检查统计镜像绑定结果。
+
 实现提交 eb5cfbd 的原生 workflow 为 45028523665。tests/darwin_services.m 和 tests/test_services.c 验证了弹窗输入、栈回调、文件读写、Unicode、通知和模拟网络完成；原有布局、容器、点击与表格回归同时运行。tests/services-info.plist 使用独立 Bundle 标识，验证不依赖目标启动器的元数据。
 
 用户要求停止点屏幕后，后续验证限于静态检查和 GitHub Actions。新版原始 IPA 的联网列表、创建账户、安装版本和启动游戏尚未完成真机端到端验收。不能用 CI 通过替代这一结论。

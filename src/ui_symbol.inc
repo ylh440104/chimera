@@ -22,21 +22,66 @@ static ui_symbol symbol_catalog[] = {
 };
 
 typedef struct {
-    void *isa;
     const ui_symbol *symbol;
+    ui_rect rect, clip;
+} ui_symbol_layer;
+
+typedef struct vector_object {
+    void *isa;
+    struct vector_object *next;
+} vector_object;
+
+typedef struct {
+    vector_object object;
     ui_point size;
+    double scale;
     long mode;
+    size_t count;
+    ui_symbol_layer layers[];
 } ui_symbol_image;
+
+static vector_object *vector_objects;
+static const ui_rect unit_rect = {0, 0, 1, 1};
+
+static void *vector_alloc(const char *name, size_t size)
+{
+    vector_object *object = chm_foundation_alloc_obj(name, size);
+    if (object) {
+        object->next = vector_objects;
+        vector_objects = object;
+    }
+    return object;
+}
+
+static ui_rect vector_project(ui_rect frame, ui_rect rect)
+{
+    return (ui_rect){frame.x + rect.x * frame.w, frame.y + rect.y * frame.h, rect.w * frame.w, rect.h * frame.h};
+}
+
+static ui_rect vector_clip(ui_rect a, ui_rect b)
+{
+    double x = fmax(a.x, b.x), y = fmax(a.y, b.y);
+    return (ui_rect){x, y, fmin(a.x + a.w, b.x + b.w) - x, fmin(a.y + a.h, b.y + b.h) - y};
+}
 
 static ui_symbol_image *symbol_image(void *obj)
 {
     return chm_foundation_isa_is(obj, "UIImage") ? obj : NULL;
 }
 
-static void *symbol_make(const ui_symbol *symbol, ui_point size, long mode)
+enum { MAX_VECTOR_LAYERS = 1024 };
+
+static ui_symbol_image *vector_image(ui_point size, double scale, long mode,
+                                     const ui_symbol_layer *layers, size_t count)
 {
-    ui_symbol_image *image = chm_foundation_alloc_obj("UIImage", sizeof(*image));
-    if (image) { image->symbol = symbol; image->size = size; image->mode = mode; }
+    if (count > MAX_VECTOR_LAYERS) return NULL;
+    ui_symbol_image *image = vector_alloc("UIImage", sizeof(*image) + count * sizeof(*layers));
+    if (!image) return NULL;
+    image->size = size;
+    image->scale = scale;
+    image->mode = mode;
+    image->count = count;
+    if (count) memcpy(image->layers, layers, count * sizeof(*layers));
     return image;
 }
 
@@ -47,7 +92,10 @@ static void *system_image(void *cls, const char *sel, void *name)
     for (size_t i = 0; i < sizeof(symbol_catalog) / sizeof(*symbol_catalog); i++) {
         ui_symbol *s = &symbol_catalog[i];
         if (strcmp(s->name, key)) continue;
-        if (!s->standard) s->standard = symbol_make(s, (ui_point){24, 24}, 0);
+        if (!s->standard) {
+            ui_symbol_layer layer = {s, unit_rect, unit_rect};
+            s->standard = vector_image((ui_point){24, 24}, g_scale, 0, &layer, 1);
+        }
         return s->standard;
     }
     return NULL;
@@ -64,9 +112,16 @@ static void *image_scaled(void *self, const char *sel, ui_point size)
 {
     (void)sel;
     ui_symbol_image *image = symbol_image(self);
-    if (!image || !image->symbol || !isfinite(size.x) || !isfinite(size.y) || size.x <= 0 || size.y <= 0) return NULL;
+    if (!image || !isfinite(size.x) || !isfinite(size.y) || size.x <= 0 || size.y <= 0) return NULL;
     if (image->size.x == size.x && image->size.y == size.y) return self;
-    return symbol_make(image->symbol, size, image->mode);
+    return vector_image(size, image->scale, image->mode, image->layers, image->count);
+}
+
+static double image_scale(void *self, const char *sel)
+{
+    (void)sel;
+    ui_symbol_image *image = symbol_image(self);
+    return image && image->scale > 0 ? image->scale : 1;
 }
 
 static long image_mode(void *self, const char *sel)
@@ -80,8 +135,8 @@ static void *image_with_mode(void *self, const char *sel, long mode)
 {
     (void)sel;
     ui_symbol_image *image = symbol_image(self);
-    if (!image || !image->symbol) return NULL;
-    return mode == image->mode ? self : symbol_make(image->symbol, image->size, mode);
+    if (!image) return NULL;
+    return mode == image->mode ? self : vector_image(image->size, image->scale, mode, image->layers, image->count);
 }
 
 static void image_set(void *self, const char *sel, void *image)
@@ -120,7 +175,17 @@ static void *device_version_field(void *self, const char *sel)
     return chm_foundation_string("Chimera");
 }
 
+#include "ui_image_renderer.inc"
+
 static const chm_host_method image_methods[] = {
+    {"UIGraphicsImageRendererFormat", "defaultFormat", "@@:", renderer_format, 1},
+    {"UIGraphicsImageRendererFormat", "scale", "d@:", format_scale, 0},
+    {"UIGraphicsImageRendererFormat", "setScale:", "v@:d", format_set_scale, 0},
+    {"UIGraphicsImageRenderer", "initWithSize:format:", "@@:{CGSize=dd}@", renderer_init, 0},
+    {"UIGraphicsImageRenderer", "initWithSize:", "@@:{CGSize=dd}", renderer_init_size, 0},
+    {"UIGraphicsImageRenderer", "imageWithActions:", "@@:@?", renderer_image, 0},
+    {"UIImage", "drawInRect:", "v@:{CGRect={CGPoint=dd}{CGSize=dd}}", image_draw_rect, 0},
+    {"UIImage", "scale", "d@:", image_scale, 0},
     {"UIImage", "systemImageNamed:", "@@:@", system_image, 1},
     {"UIImage", "size", "{CGSize=dd}@:", image_size, 0},
     {"UIImage", "_imageWithSize:", "@@:{CGSize=dd}", image_scaled, 0},
@@ -137,8 +202,12 @@ static const chm_host_method image_methods[] = {
 
 static void symbols_reset(void)
 {
-    for (size_t i = 0; i < sizeof(symbol_catalog) / sizeof(*symbol_catalog); i++) {
-        free(symbol_catalog[i].standard);
+    renderer_reset();
+    for (size_t i = 0; i < sizeof(symbol_catalog) / sizeof(*symbol_catalog); i++)
         symbol_catalog[i].standard = NULL;
+    while (vector_objects) {
+        vector_object *next = vector_objects->next;
+        free(vector_objects);
+        vector_objects = next;
     }
 }

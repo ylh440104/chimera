@@ -16,6 +16,12 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <stddef.h>
+#include <zlib.h>
+
+_Static_assert(sizeof(z_stream) == 112 && sizeof(uLong) == 8 && sizeof(z_crc_t) == 4 &&
+               offsetof(z_stream, next_out) == 24 && offsetof(z_stream, opaque) == 80 &&
+               offsetof(z_stream, adler) == 96, "Darwin arm64 z_stream ABI required");
 
 typedef struct {
     const char *name;
@@ -777,6 +783,14 @@ static char *safe_dirname(char *p)
 #define FN(n, f, k) { n, (void *)(f), k }
 
 static const chm_entry g_entries[] = {
+    FN("_crc32", crc32, "libz"),
+    FN("_get_crc_table", get_crc_table, "libz"),
+    FN("_deflateInit2_", deflateInit2_, "libz"),
+    FN("_deflate", deflate, "libz"),
+    FN("_deflateEnd", deflateEnd, "libz"),
+    FN("_inflateInit2_", inflateInit2_, "libz"),
+    FN("_inflate", inflate, "libz"),
+    FN("_inflateEnd", inflateEnd, "libz"),
     FN("_malloc", malloc, "libc.alloc"),
     FN("_calloc", calloc, "libc.alloc"),
     FN("_realloc", realloc, "libc.alloc"),

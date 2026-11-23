@@ -57,10 +57,10 @@ jobs:
                src/format.c src/uikit.c src/scene.c src/scene_manifest.c yxml.o \
                src/trap.c src/loader.c"
           for tool in chmdump chmdemand chimera_run; do
-            cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -pthread -Iinclude -Ithird_party/yxml -o "$tool" "tools/$tool.c" $SRC -lm -ldl
+            cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -pthread -Iinclude -Ithird_party/yxml -o "$tool" "tools/$tool.c" $SRC -lm -ldl -lz
           done
           for test in test_input test_table test_services test_startup; do
-            cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -pthread -Iinclude -Ithird_party/yxml -o "$test" "tests/$test.c" $SRC -lm -ldl
+            cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -pthread -Iinclude -Ithird_party/yxml -o "$test" "tests/$test.c" $SRC -lm -ldl -lz
           done
           ./chmdump tests/fixture.ios > dump.txt
           head -3 dump.txt
@@ -114,6 +114,9 @@ jobs:
             abi-results/container-*.argb
             abi-results/container-*.log
             abi-results/layout.jsonl
+            abi-results/vector.jsonl
+            abi-results/darwin_methods.log
+            abi-results/darwin_compression.log
             abi-results/darwin_layout.log
             abi-results/input.log
             abi-results/darwin_input

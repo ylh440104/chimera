@@ -25,4 +25,4 @@ add_library(chimera SHARED
 
 target_include_directories(chimera PRIVATE ${ROOT}/include ${ROOT}/third_party/yxml)
 
-target_link_libraries(chimera log m dl)
+target_link_libraries(chimera log m dl z)

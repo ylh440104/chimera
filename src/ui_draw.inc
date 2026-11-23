@@ -25,16 +25,25 @@ static void emit_text(chm_draw_fn draw, void *context, const chm_draw_command *b
 static int paint_symbol(chm_draw_fn draw, void *context, void *object, chm_draw_command box, uint32_t tint)
 {
     ui_symbol_image *img = symbol_image(object);
-    if (!img || !img->symbol || box.width <= 0 || box.height <= 0) return 0;
-    double side = fmin(box.width, box.height);
-    box.x += (box.width - side) / 2;
-    box.y += (box.height - side) / 2;
-    box.width = box.height = side;
-    box.kind = 3;
-    box.text = img->symbol->path;
-    box.color = tint;
-    if (box.x < box.clip_right && box.y < box.clip_bottom && box.x + side > box.clip_left && box.y + side > box.clip_top)
-        draw(context, &box);
+    if (!img || img->size.x <= 0 || img->size.y <= 0 || box.width <= 0 || box.height <= 0) return 0;
+    double scale = fmin(box.width / img->size.x, box.height / img->size.y);
+    double w = img->size.x * scale, h = img->size.y * scale;
+    ui_rect frame = {box.x + (box.width - w) / 2, box.y + (box.height - h) / 2, w, h};
+    ui_rect visible = {box.clip_left, box.clip_top, box.clip_right - box.clip_left, box.clip_bottom - box.clip_top};
+    for (size_t i = 0; i < img->count; i++) {
+        const ui_symbol_layer *layer = &img->layers[i];
+        ui_rect rect = vector_project(frame, layer->rect);
+        ui_rect clip = vector_clip(visible, vector_project(frame, layer->clip));
+        if (clip.w <= 0 || clip.h <= 0) continue;
+        chm_draw_command cmd = box;
+        cmd.kind = 3;
+        cmd.color = tint;
+        cmd.text = layer->symbol->path;
+        cmd.x = rect.x; cmd.y = rect.y; cmd.width = rect.w; cmd.height = rect.h;
+        cmd.clip_left = clip.x; cmd.clip_top = clip.y;
+        cmd.clip_right = clip.x + clip.w; cmd.clip_bottom = clip.y + clip.h;
+        draw(context, &cmd);
+    }
     return 1;
 }
 
