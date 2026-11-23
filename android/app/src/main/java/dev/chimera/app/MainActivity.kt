@@ -1,21 +1,31 @@
 package dev.chimera.app
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
-import android.view.View
-import android.view.ViewGroup
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.ScrollView
-import android.widget.TextView
+import android.view.WindowManager
+import android.widget.Toast
+import androidx.activity.addCallback
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import java.io.File
 
 class MainActivity : AppCompatActivity() {
-    private lateinit var logView: TextView
-    private lateinit var openButton: Button
-    private lateinit var runButton: Button
-    private lateinit var frameView: GuestImageView
+    private lateinit var screen: GuestScreen
+    private val frameView get() = screen.image
+    @Volatile private var viewport: GuestViewport? = null
+    private val sessionLog = GuestSessionLog()
+    private var exporting = false
+    private val storagePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (!closed) {
+            if (granted) exportSessionLog() else toast("需要存储权限才能将日志写入 Download")
+        }
+    }
     private var frame: GuestFrame? = null
     private var busy = false
     private var ready = false
@@ -50,7 +60,7 @@ class MainActivity : AppCompatActivity() {
         frameScheduled = false
         if (!foreground || closed || busy || !guestLive || !gpuAvailable || editorToken != 0L) return
         val epoch = serviceEpoch
-        val first = frame == null
+        val first = !frameFitsViewport()
         val hz = frameView.display?.refreshRate?.takeIf { it > 0 && it.isFinite() } ?: 60f
         tickInFlight = true
         Native.executor.execute {
@@ -77,21 +87,17 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val root = LinearLayout(this)
-        root.orientation = LinearLayout.VERTICAL
-        root.setPadding(32, 64, 32, 24)
-        openButton = Button(this).apply {
-            text = "‹ 应用库"
-            setOnClickListener { finish() }
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        if (Build.VERSION.SDK_INT >= 28) {
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode = if (Build.VERSION.SDK_INT >= 30)
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                else WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
         }
-        runButton = Button(this).apply {
-            text = "运行"
-            isEnabled = false
-            setOnClickListener { runLoaded() }
-        }
-        frameView = GuestImageView(this).apply {
-            contentDescription = "客机画面"
-            visibility = View.GONE
+        screen = GuestScreen(this, ::returnToLibrary, ::requestLogExport)
+        hideSystemBars()
+        frameView.apply {
             onGuestTap = { from, to -> tapGuest(from.x, from.y, to.x, to.y) }
             onGuestPan = { phase, x, y ->
                 if (phase == PanPhase.BEGIN) panEpoch = serviceEpoch
@@ -99,50 +105,112 @@ class MainActivity : AppCompatActivity() {
             }
             onBackend = { hardware ->
                 gpuAvailable = hardware
-                buttons()
+                if (!hardware) showFailure(serviceEpoch, "当前窗口无法绘制客机画面")
+                updateGuestInput()
                 log(if (hardware) "GPU 硬件 Canvas · 屏幕同步刷新" else "当前窗口不支持硬件 Canvas，已暂停客机绘制")
                 Native.executor.execute {
                     File(filesDir, "render-backend.txt").writeText("hardwareCanvas=$hardware\nbitmapRaster=false\nframeClock=Choreographer\n")
                 }
             }
         }
-        logView = TextView(this).apply {
-            textSize = 11f
-            setTextIsSelectable(true)
-        }
-        val scroll = ScrollView(this)
-        scroll.addView(logView)
-        root.addView(openButton)
-        root.addView(runButton)
-        root.addView(frameView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 2f))
-        root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        setContentView(root)
+        setContentView(screen)
+        onBackPressedDispatcher.addCallback(this) { returnToLibrary() }
         val key = intent.getStringExtra("app_key")
         if (key == null) {
-            startActivity(Intent(this, LibraryActivity::class.java))
-            finish()
-        } else {
-            appKey = key
-            loadInstalled()
+            returnToLibrary()
+            return
         }
-    }
-
-    private fun log(text: String) {
-        runOnUiThread {
-            if (!closed) {
-                logView.append(text + "\n")
-                (logView.parent as? ScrollView)?.post {
-                    if (!closed) (logView.parent as? ScrollView)?.fullScroll(ScrollView.FOCUS_DOWN)
+        appKey = key
+        log("正在打开应用")
+        frameView.addOnLayoutChangeListener { view, _, _, _, _, _, _, _, _ ->
+            if (!closed && view.width > 0 && view.height > 0) {
+                val previous = viewport
+                val next = GuestViewport.fromPixels(view.width, view.height)
+                if (next != previous) {
+                    viewport = next
+                    if (previous == null) loadInstalled() else updateGuestInput()
                 }
             }
         }
     }
 
-    private fun buttons() {
-        openButton.isEnabled = !busy
-        runButton.isEnabled = !busy && ready && !executed
-        frameView.acceptInput = foreground && !closed && !busy && guestLive && gpuAvailable && frameView.hasFrame
+    private fun hideSystemBars() {
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            hide(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && !closed) hideSystemBars()
+    }
+
+    private fun returnToLibrary() {
+        if (closed) return
+        closeSession()
+        if (isTaskRoot) startActivity(Intent(this, LibraryActivity::class.java))
+        finish()
+    }
+
+    private fun log(text: String) = sessionLog.append(text)
+
+    private fun saveReport(report: String) {
+        sessionLog.updateReport(report)
+        try {
+            File(filesDir, "last-report.txt").writeText(report)
+        } catch (e: java.io.IOException) {
+            log("保存内部报告失败：${e.message}")
+        }
+    }
+
+    private fun toast(text: String) = Toast.makeText(applicationContext, text, Toast.LENGTH_LONG).show()
+
+    private fun requestLogExport() {
+        if (closed || exporting) return
+        if (Build.VERSION.SDK_INT < 29 && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            storagePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        } else exportSessionLog()
+    }
+
+    private fun exportSessionLog() {
+        if (closed || exporting) return
+        exporting = true
+        val epoch = serviceEpoch
+        val nativeReport = if (ready) Native.executor.submit<String?> {
+            if (!closed && serviceEpoch == epoch) Native.report() else null
+        } else null
+        DownloadLog.executor.execute {
+            val latest = try {
+                nativeReport?.get(500, java.util.concurrent.TimeUnit.MILLISECONDS)
+            } catch (e: Exception) {
+                nativeReport?.cancel(false)
+                null
+            }
+            val message = try {
+                "日志已保存到 ${DownloadLog.save(applicationContext, sessionLog.snapshot(latest))}"
+            } catch (e: Exception) {
+                "导出日志失败：${e.localizedMessage ?: "无法写入 Download"}"
+            }
+            runOnUiThread { exporting = false; toast(message) }
+        }
+    }
+
+    private fun updateGuestInput() {
+        frameView.acceptInput = foreground && !closed && !busy && guestLive && gpuAvailable && frameFitsViewport()
         scheduleFrame()
+    }
+
+    private fun frameFitsViewport(): Boolean {
+        val current = frame ?: return false
+        val size = viewport ?: return false
+        return current.width == size.width && current.height == size.height
+    }
+
+    private fun showFailure(epoch: Long, message: String) {
+        runOnUiThread {
+            if (!closed && epoch == serviceEpoch) screen.showStatus("$message\n可从右上角导出日志")
+        }
     }
 
     private fun loadInstalled() {
@@ -153,7 +221,7 @@ class MainActivity : AppCompatActivity() {
         ready = false
         executed = false
         guestLive = false
-        buttons()
+        updateGuestInput()
         Native.executor.execute {
             var loaded = false
             try {
@@ -161,8 +229,10 @@ class MainActivity : AppCompatActivity() {
                     lease = library.acquire(appKey)
                     val app = library.find(appKey) ?: error("应用未安装，请从应用库重新导入")
                     check(app.sandbox.isDirectory || app.sandbox.mkdirs()) { "无法打开应用数据目录" }
-                    log("打开 ${app.name} ${app.version}")
-                    log(Native.load(app.executable.absolutePath, app.sandbox.absolutePath))
+                    sessionLog.identify(app.name, app.version, app.identifier)
+                    val size = requireNotNull(viewport)
+                    log("打开 ${app.name} ${app.version}，画面 ${size.width} × ${size.height}")
+                    sessionLog.updateReport(Native.load(app.executable.absolutePath, app.sandbox.absolutePath, size.width, size.height))
                     loaded = Native.ready()
                     if (!loaded) log("此应用尚不能运行，安装文件及数据已保留")
                 }
@@ -174,8 +244,8 @@ class MainActivity : AppCompatActivity() {
                     if (!closed && epoch == serviceEpoch) {
                         ready = value
                         busy = false
-                        buttons()
-                        if (value) runLoaded()
+                        updateGuestInput()
+                        if (value) runLoaded() else showFailure(epoch, "应用未能启动")
                     }
                 }
             }
@@ -187,7 +257,7 @@ class MainActivity : AppCompatActivity() {
         busy = true
         executed = true
         val epoch = serviceEpoch
-        buttons()
+        updateGuestInput()
         Native.executor.execute {
             try {
                 if (!closed) {
@@ -198,18 +268,17 @@ class MainActivity : AppCompatActivity() {
                         log("准备绘制客机首帧")
                         if (!drawGuestFrame(epoch)) log("等待客机创建窗口，继续处理队列")
                         runOnUiThread {
-                            if (!closed && epoch == serviceEpoch) { guestLive = true; buttons() }
+                            if (!closed && epoch == serviceEpoch) { guestLive = true; updateGuestInput() }
                         }
-                    }
-                    val report = Native.report()
-                    log(report)
-                    File(filesDir, "last-report.txt").writeText(report)
+                    } else showFailure(epoch, "应用运行已停止")
+                    saveReport(Native.report())
                 }
             } catch (e: Exception) {
                 log("运行异常：$e")
+                showFailure(epoch, "应用运行异常")
             } finally {
                 runOnUiThread {
-                    if (!closed) { busy = false; buttons() }
+                    if (!closed) { busy = false; updateGuestInput() }
                 }
             }
         }
@@ -217,8 +286,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun drawGuestFrame(epoch: Long, diagnostic: Boolean = true): Boolean {
         if (closed || epoch != serviceEpoch) return false
-        val painter = FramePainter(720, 1280)
-        val status = Native.paint(painter, 720, 1280)
+        val size = viewport ?: return false
+        val painter = FramePainter(size.width, size.height)
+        val status = Native.paint(painter, size.width, size.height)
         check(status >= 0) { "客机绘制失败（$status）" }
         if (status == 0) {
             serviceOutputs(epoch)
@@ -226,11 +296,11 @@ class MainActivity : AppCompatActivity() {
         }
         val next = painter.finish()
         runOnUiThread {
-            if (!closed && epoch == serviceEpoch) {
+            if (!closed && epoch == serviceEpoch && size == viewport) {
                 frame = next
                 frameView.submitFrame(next)
-                frameView.visibility = View.VISIBLE
-                buttons()
+                if (gpuAvailable) screen.showStatus(null)
+                updateGuestInput()
             }
         }
         if (diagnostic) {
@@ -247,13 +317,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun failGuest(epoch: Long, label: String, e: Exception) {
         if (closed || epoch != serviceEpoch) return
-        val report = Native.report()
-        runCatching { File(filesDir, "last-report.txt").writeText(report) }
+        saveReport(Native.report())
+        log("$label：$e")
         runOnUiThread {
             if (!closed && epoch == serviceEpoch) {
                 guestLive = false
-                buttons()
-                log("$label：$e\n$report")
+                updateGuestInput()
+                showFailure(epoch, label)
             }
         }
     }
@@ -284,7 +354,7 @@ class MainActivity : AppCompatActivity() {
                             val failed = result.error.isNotEmpty() || result.status >= 400
                             if (failed) log("请求 #${request.token} 失败（HTTP ${result.status}）${result.error}")
                             if (failed || now - lastTransferReport > 1000 || networkInFlight == 0) {
-                                File(filesDir, "last-report.txt").writeText(Native.report())
+                                saveReport(Native.report())
                                 lastTransferReport = now
                             }
                             if (foreground) serviceOutputs(epoch)
@@ -355,13 +425,7 @@ class MainActivity : AppCompatActivity() {
                 check(changed >= 0) { "拖动回调异常" }
                 if (changed > 0) drawGuestFrame(event.epoch, diagnostic = event.phase != PanPhase.MOVE)
             } catch (e: Exception) {
-                runOnUiThread {
-                    if (!closed && event.epoch == serviceEpoch && guestLive) {
-                        log("滚动失败：$e")
-                        guestLive = false
-                        buttons()
-                    }
-                }
+                failGuest(event.epoch, "滚动失败", e)
             }
         }
     }
@@ -370,7 +434,7 @@ class MainActivity : AppCompatActivity() {
         if (closed || busy || !guestLive) return
         val epoch = serviceEpoch
         busy = true
-        buttons()
+        updateGuestInput()
         Native.executor.execute {
             var healthy = true
             try {
@@ -388,9 +452,7 @@ class MainActivity : AppCompatActivity() {
             } finally {
                 try {
                     if (!closed) {
-                        val report = Native.report()
-                        File(filesDir, "last-report.txt").writeText(report)
-                        if (!healthy) log(report)
+                        saveReport(Native.report())
                     }
                 } catch (e: Exception) {
                     log("保存诊断失败：$e")
@@ -398,9 +460,12 @@ class MainActivity : AppCompatActivity() {
                 val ok = healthy
                 runOnUiThread {
                     if (!closed) {
-                        if (!ok) guestLive = false
+                        if (!ok) {
+                            guestLive = false
+                            showFailure(epoch, "客机交互已停止")
+                        }
                         busy = false
-                        buttons()
+                        updateGuestInput()
                     }
                 }
             }
@@ -410,16 +475,17 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         foreground = true
-        buttons()
+        updateGuestInput()
     }
 
     override fun onPause() {
         foreground = false
-        buttons()
+        updateGuestInput()
         super.onPause()
     }
 
-    override fun onDestroy() {
+    private fun closeSession() {
+        if (closed) return
         closed = true
         serviceEpoch++
         scheduleFrame()
@@ -430,6 +496,10 @@ class MainActivity : AppCompatActivity() {
         }
         frameView.submitFrame(null)
         frame = null
+    }
+
+    override fun onDestroy() {
+        closeSession()
         super.onDestroy()
     }
 

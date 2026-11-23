@@ -34,6 +34,7 @@ class LibraryActivity : AppCompatActivity() {
     private lateinit var add: Button
     private lateinit var progress: ProgressBar
     private var busy = false
+    private var openingGuest = false
     @Volatile private var closed = false
     private val dark get() = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
     private val ink get() = if (dark) 0xfff4f5f7.toInt() else 0xff172033.toInt()
@@ -84,6 +85,7 @@ class LibraryActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        openingGuest = false
         if (!busy) refresh(false)
     }
 
@@ -199,7 +201,8 @@ class LibraryActivity : AppCompatActivity() {
     }
 
     private fun launch(app: InstalledApp) {
-        if (busy) return
+        if (busy || openingGuest) return
+        openingGuest = true
         startActivity(Intent(this, MainActivity::class.java).putExtra("app_key", app.key))
     }
 

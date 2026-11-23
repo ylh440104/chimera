@@ -17,7 +17,8 @@ static void log_text(const char *text)
     __android_log_write(ANDROID_LOG_INFO, TAG, text);
 }
 
-JNIEXPORT jstring JNICALL Java_dev_chimera_app_Native_load(JNIEnv *env, jclass cls, jstring path, jstring sandbox)
+JNIEXPORT jstring JNICALL Java_dev_chimera_app_Native_load(JNIEnv *env, jclass cls, jstring path, jstring sandbox,
+                                                        jint width, jint height)
 {
     const char *p;
     const char *root;
@@ -30,6 +31,9 @@ JNIEXPORT jstring JNICALL Java_dev_chimera_app_Native_load(JNIEnv *env, jclass c
         chm_session_destroy(g_session);
         g_session = NULL;
     }
+    if (width <= 0 || width > 2048 || height <= 0 || height > 2048)
+        return (*env)->NewStringUTF(env, "invalid viewport");
+    chm_ui_viewport(width, height);
     g_session = chm_session_create();
     if (!g_session)
         return (*env)->NewStringUTF(env, "session allocation failed");
@@ -203,6 +207,7 @@ JNIEXPORT jint JNICALL Java_dev_chimera_app_Native_paint(JNIEnv *env, jclass cls
     (*env)->DeleteLocalRef(env, type);
     if (!draw) return -1;
     paint_context context = {env, target, draw, 0, 0, 0};
+    chm_ui_viewport(width, height);
     int rc = chm_ui_paint(draw_to_android, &context, width, height);
     if (context.failed) rc = -1;
     if (rc < 0) chm_session_log(g_session, "paint: rectangles=%zu text_commands=%zu result=%d",

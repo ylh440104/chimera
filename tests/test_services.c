@@ -65,6 +65,13 @@ int main(int argc, char **argv)
     await_callbacks(3);
     check(0);
     if (chm_ui_paint(inspect, NULL, 720, 1280) != 1 || labels != 5 || !field_y || !confirm_y || !disabled_y) fail("dialog rendering", labels);
+    const double portrait_field_y = field_y;
+    chm_ui_viewport(1600, 720);
+    labels = 0;
+    if (chm_ui_paint(inspect, NULL, 1600, 720) != 1 || labels != 5 ||
+        field_x != 800 || field_y != portrait_field_y - 280 || confirm_x != 800)
+        fail("landscape dialog layout", labels);
+    puts("viewport: 720x1280 to 1600x720, centered dialog and input");
     tap(disabled_x, disabled_y, 0);
     tap(field_x, field_y, 1);
     uint64_t token = chm_ui_focused_field();

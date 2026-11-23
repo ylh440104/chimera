@@ -1,5 +1,13 @@
 package dev.chimera.app
 
+import android.os.Looper
+import android.view.View
+import android.widget.Button
+import android.widget.LinearLayout
+import org.robolectric.Robolectric
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
+import java.util.concurrent.TimeUnit
 import com.dd.plist.BinaryPropertyListWriter
 import com.dd.plist.NSDictionary
 import org.junit.Assert.*
@@ -80,6 +88,39 @@ class AppLibraryTest {
         }
         assertEquals("first settings", File(library().find(first.key)!!.sandbox, "Library/Preferences/preferences.plist").readText())
         assertTrue(File(second.bundle, "Info.plist").readText().startsWith("<?xml"))
+    }
+
+    @Test fun returningToLibraryCanOpenAnotherAppAndDoubleTapLaunchesOnce() {
+        val context = RuntimeEnvironment.getApplication()
+        val store = AppLibrary(context.filesDir, context.cacheDir)
+        val first = store.install(ipa().inputStream())
+        val second = store.install(ipa("dev.test.two").inputStream())
+        val controller = Robolectric.buildActivity(LibraryActivity::class.java).setup()
+        val activity = controller.get()
+        fun waitForList() {
+            LibraryWorker.executor.submit {}.get(5, TimeUnit.SECONDS)
+            shadowOf(Looper.getMainLooper()).idle()
+        }
+        fun open(app: InstalledApp) {
+            val views = ArrayList<View>()
+            activity.window.decorView.findViewsWithText(views, app.identifier, View.FIND_VIEWS_WITH_TEXT)
+            val row = views.single().parent.parent as LinearLayout
+            val button = (0 until row.childCount).map(row::getChildAt).filterIsInstance<Button>().single()
+            assertEquals("打开", button.text)
+            button.performClick()
+            button.performClick()
+            val intent = requireNotNull(shadowOf(activity).nextStartedActivity)
+            assertEquals(MainActivity::class.java.name, intent.component?.className)
+            assertEquals(app.key, intent.getStringExtra("app_key"))
+            assertNull(shadowOf(activity).nextStartedActivity)
+        }
+        try {
+            waitForList()
+            open(first)
+            controller.pause().resume()
+            waitForList()
+            open(second)
+        } finally { controller.pause().stop().destroy() }
     }
 
     @Test fun updateKeepsDataAndFailedImportsKeepPreviousVersion() {

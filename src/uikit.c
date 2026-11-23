@@ -1326,10 +1326,37 @@ int chm_ui_main(int argc, char **argv, void *principal, void *delegate_name)
     return 0;
 }
 
+static void resize_window_controller(ui_vc *controller, int width, int height)
+{
+    ui_view *view = controller ? as_view(controller->view) : NULL;
+    if (view && view->parent == g_key_window) {
+        view->w = width;
+        view->h = height;
+    }
+}
+
 int chm_ui_viewport(int w, int h)
 {
-    g_vw = w > 0 ? w : 720;
-    g_vh = h > 0 ? h : 1280;
+    int width = w > 0 ? w : 720;
+    int height = h > 0 ? h : 1280;
+    chm_guest_lock();
+    if (g_vw != width || g_vh != height ||
+        (g_key_window && (g_key_window->w != width || g_key_window->h != height ||
+                          g_key_window->x != 0 || g_key_window->y != 0))) {
+        g_vw = width;
+        g_vh = height;
+        if (g_key_window) {
+            g_key_window->x = 0;
+            g_key_window->y = 0;
+            g_key_window->w = width;
+            g_key_window->h = height;
+            resize_window_controller(as_vc(g_key_window->owner), width, height);
+            for (ui_vc *modal = g_modal; modal; modal = modal->previous_modal)
+                resize_window_controller(modal, width, height);
+        }
+        layout_dirty = 1;
+    }
+    chm_guest_unlock();
     return 0;
 }
 
