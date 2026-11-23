@@ -18,6 +18,12 @@ Chimera 按 Objective-C、UIKit、Foundation 的接口实现能力，不依据 I
 
 Android 使用硬件加速 View Canvas 重放绘制指令，不再通过 Canvas(Bitmap) 生成整屏图片。实际后端由 canvas.isHardwareAccelerated 记录到 render-backend.txt；布局、文字排版和事件判断仍由 CPU 执行。HTTP(S) 数据任务由 Android HttpURLConnection 执行，结果回到同一个客机执行线程。每个数据任务响应上限为 32 MiB。
 
+## 文件路径与 Darwin ABI
+
+`NSHomeDirectory` 和 Documents 查询使用客机的绝对 `HOME`。改变 `HOME` 不等于改变当前目录；`NSFileManager` 切换当前目录后，相对路径的 `open`、`access`、`stat`、`opendir` 和 `fopen` 使用同一套映射。POSIX 创建文件不会顺带创建缺少的父目录。
+
+`tests/darwin_files.m` 从客机两端验证同一个文件：先通过 Documents URL 原子写入，再用文件描述符和标准文件流读回；反向用 `open` 创建、追加，由 `NSData` 和 `NSFileManager` 核对字节、大小和权限。测试按 arm64 Darwin 的字段偏移读取 `stat`，并在 4 GiB 以上定位后验证末尾字节和 `fclose` 的所有权。宿主另外检查两个文件的实际位置、内容及权限。这组用例不覆盖完整文件系统、归档安装或所有 `open` 标志；没有宿主数据的 `stat` 出生时间和 Darwin 专有标志保留为零。
+
 ## 验收证据
 
 提交 `c5e90e9` 的客机测试在手指上移 100 点、尚未抬起时检查目标行及图标，再点选该行核对回调。Android 测试覆盖拖动中替换显示帧、合并 MOVE、着色与裁剪。文件测试通过 Documents URL 写入 10 字节，用相对路径和文件 URL 分别读回，并检查文件大小、权限与修改时间。[原生回归](https://github.com/ylh440104/chimera/actions/runs/45108042738) · [Android 测试与签名构建](https://github.com/ylh440104/chimera/actions/runs/45108042723)

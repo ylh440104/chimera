@@ -117,6 +117,7 @@ jobs:
             abi-results/vector.jsonl
             abi-results/darwin_methods.log
             abi-results/darwin_compression.log
+            abi-results/darwin_files.log
             abi-results/darwin_layout.log
             abi-results/input.log
             abi-results/darwin_input

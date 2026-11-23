@@ -95,6 +95,13 @@ int main(int argc, char **argv)
     printf("main bind=%u missing=%u rebase=%u executable=%d\n",
            s->images[0].nfixup_bind, s->images[0].nfixup_missing,
            s->images[0].nfixup_rebase, s->images[0].executable);
+    for (int i = 1; i < s->image_count; i++) {
+        const chm_image *img = &s->images[i];
+        const char *base = strrchr(s->image_paths[i], '/');
+        printf("image[%d] %s bind=%u missing=%u rebase=%u executable=%d\n", i,
+               base ? base + 1 : s->image_paths[i], img->nfixup_bind, img->nfixup_missing,
+               img->nfixup_rebase, img->executable);
+    }
     printf("distinct unresolved=%d\n\n", s->missing_count);
     printf("%-22s %8s %8s\n", "family", "symbols", "slots");
     for (int i = 0; i < nf; ++i)

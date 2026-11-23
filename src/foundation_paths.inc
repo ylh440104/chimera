@@ -19,7 +19,9 @@ void chm_foundation_set_root(const char *root)
 
 int chm_foundation_map_path(const char *in, char *out, size_t cap)
 {
-    if (!in || !*in || !out || !cap) { errno = EINVAL; return 0; }
+    if (!in || !out) { errno = EFAULT; return 0; }
+    if (!*in) { errno = ENOENT; return 0; }
+    if (!cap) { errno = ENAMETOOLONG; return 0; }
     const char *root = g_sandbox_root, *rel = in;
     char joined[2048], normalized[2048];
     if (path_below(in, g_sandbox_root)) rel = in + strlen(g_sandbox_root);

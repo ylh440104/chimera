@@ -362,7 +362,7 @@ static void *NSUserName_impl(void)
 
 static void *NSHomeDirectory_impl(void)
 {
-    return string_const("/var/mobile");
+    return chm_foundation_home_directory();
 }
 
 static void *NSTemporaryDirectory_impl(void)

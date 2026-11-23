@@ -5,7 +5,8 @@
 
 int chm_io_close_number(int guest);
 int chm_io_file_status(int guest, struct stat *status);
-int chm_io_seek_number(int guest, int64_t offset, int whence);
+static _Thread_local int g_errno_cell;
+static int io_errno(int value);
 int chm_io_fd_flags(int guest);
 int chm_io_set_fd_flags(int guest, int flags);
 int chm_io_remap(int guest, int host, int reset_host);
@@ -19,6 +20,7 @@ typedef struct io_description {
 } io_description;
 typedef struct io_descriptor {
     int guest, host;
+    FILE *stream;
     io_description *description;
     struct io_descriptor *next;
 } io_descriptor;
@@ -114,40 +116,34 @@ int chm_io_file_status(int guest, struct stat *status)
 {
     pthread_mutex_lock(&io_lock);
     int host = io_host(guest);
-    int result = host >= 0 && status ? fstat(host, status) : -1;
+    int result = fstat(host, status);
     pthread_mutex_unlock(&io_lock);
     return result;
 }
 
-int chm_io_seek_number(int guest, int64_t offset, int whence)
+int64_t chm_io_seek_number(int guest, int64_t offset, int whence)
 {
     pthread_mutex_lock(&io_lock);
-    int host = io_host(guest);
-    int result = host >= 0 ? (int)lseek(host, (off_t)offset, whence) : -1;
+    off_t result = lseek(io_host(guest), (off_t)offset, whence);
+    if (result < 0) g_errno_cell = io_errno(errno);
     pthread_mutex_unlock(&io_lock);
     return result;
 }
-
-int chm_io_stat(int guest, void *buffer)
-{
-    if (!buffer) { errno = EFAULT; return -1; }
-    int host = io_host(guest);
-    return host >= 0 ? fstat(host, buffer) : -1;
-}
-
-int chm_io_seek(int guest, int64_t offset, int whence)
-{
-    int host = io_host(guest);
-    if (host < 0) { errno = EBADF; return -1; }
-    return (int)lseek(host, (off_t)offset, whence);
-}
-static _Thread_local int g_errno_cell;
 
 static int io_errno(int value)
 {
-    if (value == EAGAIN) return 35;
-    if (value == ECANCELED) return 89;
-    return value;
+    switch (value) {
+    case EAGAIN: return 35;
+    case ENOTSUP: return 45;
+    case ELOOP: return 62;
+    case ENAMETOOLONG: return 63;
+    case ENOTEMPTY: return 66;
+    case EDQUOT: return 69;
+    case ESTALE: return 70;
+    case EOVERFLOW: return 84;
+    case ECANCELED: return 89;
+    default: return value;
+    }
 }
 
 int chm_io_fd_flags(int guest)
@@ -174,31 +170,26 @@ static int io_host(int guest)
 static int io_track(int guest, int host, io_description *description, int polled)
 {
     io_descriptor *existing = io_find(guest);
-    if (existing) {
-        if (existing->host >= 0 && existing->host != host) close(existing->host);
-        if (existing->description && !--existing->description->references) free(existing->description);
-        existing->host = host;
-        if (!description) {
-            existing->description = calloc(1, sizeof(*existing->description));
-            if (!existing->description) return -1;
-            existing->description->flags = fcntl(host, F_GETFL);
-            existing->description->polled = polled;
-        }
-        existing->description->references++;
-        return 0;
-    }
-    io_descriptor *d = calloc(1, sizeof(*d));
+    io_descriptor *d = existing ? existing : calloc(1, sizeof(*d));
     if (!d) return -1;
     if (!description) {
         description = calloc(1, sizeof(*description));
-        if (!description) { free(d); return -1; }
-        description->flags = fcntl(host, F_GETFL);
+        if (!description) { if (!existing) free(d); return -1; }
+        description->flags = host >= 0 ? fcntl(host, F_GETFL) : 0;
         if (polled) description->flags &= ~O_NONBLOCK;
         description->polled = polled;
     }
     description->references++;
+    if (existing) {
+        if (d->host >= 0 && d->host != host) {
+            if (d->stream) fclose(d->stream); else close(d->host);
+            d->stream = NULL;
+        }
+        if (!--d->description->references) free(d->description);
+    } else {
+        d->next = io_descriptors; io_descriptors = d;
+    }
     d->guest = guest; d->host = host; d->description = description;
-    d->next = io_descriptors; io_descriptors = d;
     return 0;
 }
 static int io_close(int guest)
@@ -210,7 +201,10 @@ static int io_close(int guest)
         return close(guest);
     }
     io_descriptor *d = *link;
-    int result = d->host >= 0 ? close(d->host) : -1;
+    int result;
+    if (d->host < 0) { errno = EBADF; result = -1; }
+    else result = d->stream ? fclose(d->stream) : close(d->host);
+    d->stream = NULL;
     if (guest <= 2) { d->host = -1; return result; }
     *link = d->next;
     if (!--d->description->references) free(d->description);
@@ -235,22 +229,13 @@ static int io_dup2(int source, int target)
     int host = io_host(source);
     if (host < 0 || target < 0) { errno = EBADF; g_errno_cell = EBADF; return -1; }
     if (source == target) return fcntl(host, F_GETFD) >= 0 ? target : -1;
-    int copy = target <= 2 ? fcntl(host, F_DUPFD_CLOEXEC, 3) : dup2(host, target);
-    if (copy < 0) { g_errno_cell = io_errno(errno); return -1; }
     io_descriptor *existing = io_find(target), *original = io_find(source);
-    io_description *description = original ? original->description : NULL;
-    if (description) description->references++;
-    if (existing) {
-        if (target <= 2 && existing->host >= 0) close(existing->host);
-        if (!--existing->description->references) free(existing->description);
-        existing->description = NULL;
-        io_descriptor **link = &io_descriptors;
-        while (*link != existing) link = &(*link)->next;
-        *link = existing->next; free(existing);
+    int destination = existing && existing->host >= 0 ? existing->host : target;
+    int copy = target <= 2 && destination <= 2 ? fcntl(host, F_DUPFD_CLOEXEC, 3) : dup2(host, destination);
+    if (copy < 0) { g_errno_cell = io_errno(errno); return -1; }
+    if (io_track(target, copy, original ? original->description : NULL, 0)) {
+        close(copy); errno = ENOMEM; g_errno_cell = ENOMEM; return -1;
     }
-    int rc = io_track(target, copy, description, 0);
-    if (description && !--description->references) free(description);
-    if (rc) { close(copy); errno = ENOMEM; g_errno_cell = ENOMEM; return -1; }
     return target;
 }
 static ssize_t io_write_no_signal(int fd, const void *bytes, size_t length)
@@ -325,11 +310,12 @@ static int io_fcntl(int fd, int command, void *argument)
     }
     return fcntl(host, command, argument);
 }
-void chm_io_reset(void)
+static void io_descriptors_reset(void)
 {
     while (io_descriptors) {
         io_descriptor *d = io_descriptors; io_descriptors = d->next;
-        if (d->host >= 0) close(d->host);
+        if (d->stream) fclose(d->stream);
+        else if (d->host >= 0) close(d->host);
         if (!--d->description->references) free(d->description);
         free(d);
     }

@@ -4,7 +4,7 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 runner=${1:?usage: run_darwin_abi.sh /path/to/chimera_run}
 tmp=$(mktemp -d)
 trap 'rm -rf -- "$tmp"' EXIT
-for name in darwin_format darwin_dispatch darwin_foundation darwin_scene darwin_containers darwin_layout darwin_methods darwin_compression; do
+for name in darwin_format darwin_dispatch darwin_foundation darwin_scene darwin_containers darwin_layout darwin_methods darwin_compression darwin_files; do
     "${CLANG:-clang-18}" -target arm64-apple-ios15.0 -O2 -fblocks -fno-objc-arc -fno-builtin -fno-stack-protector -c "$root/tests/$name.m" -o "$tmp/$name.o"
     "${LD64:-ld64.lld-18}" -arch arm64 -platform_version ios 15.0 15.0 -e _main -fixup_chains -undefined dynamic_lookup -o "$tmp/$name" "$tmp/$name.o"
     mkdir "$tmp/$name.root"
@@ -41,7 +41,10 @@ for name in darwin_format darwin_dispatch darwin_foundation darwin_scene darwin_
         cp "$root/tests/scene-info.plist" "$tmp/Info.plist"
         frame="$tmp/scene.argb"
     fi
-    CHM_SANDBOX_ROOT="$tmp/$name.root" CHM_FRAME_OUT="$frame" timeout 20 "$runner" "$tmp/$name" >"$tmp/$name.log" 2>&1 || { rc=$?; cat "$tmp/$name.log" >&2; exit "$rc"; }
+    (
+        if [ "$name" = darwin_files ]; then umask 0027; fi
+        CHM_SANDBOX_ROOT="$tmp/$name.root" CHM_FRAME_OUT="$frame" timeout 20 "$runner" "$tmp/$name"
+    ) >"$tmp/$name.log" 2>&1 || { rc=$?; cat "$tmp/$name.log" >&2; exit "$rc"; }
     if [ "$name" = darwin_scene ]; then
         grep -F 'name=Main & Window delegate=FixtureWindowDelegate' "$tmp/$name.log"
         grep -Fx 'ui: launched key_window=yes views=3' "$tmp/$name.log"
@@ -55,7 +58,17 @@ for name in darwin_format darwin_dispatch darwin_foundation darwin_scene darwin_
         fi
     fi
     grep -Fx 'entry returned 0' "$tmp/$name.log"
-    if [ "$name" = darwin_compression ] && [ -n "${CHM_TEST_EXPORT:-}" ]; then
+    if [ "$name" = darwin_files ]; then
+        docs="$tmp/$name.root/mobile/Profiles/Secondary/Documents"
+        printf 'round trip' | cmp - "$docs/notice.txt"
+        printf '\000\376\011A!' | cmp - "$docs/created.bin"
+        test "$(stat -c '%a' "$docs/notice.txt")" = 600
+        test "$(stat -c '%a' "$docs/created.bin")" = 640
+        test ! -e "$docs/wide.tmp"
+        test ! -e "$docs/absent"
+        printf '%s\n' 'host verified notice.txt (10 bytes, 0600) and created.bin (5 bytes, 0640)' | tee -a "$tmp/$name.log"
+    fi
+    if { [ "$name" = darwin_compression ] || [ "$name" = darwin_files ]; } && [ -n "${CHM_TEST_EXPORT:-}" ]; then
         mkdir -p "$CHM_TEST_EXPORT"
         cp "$tmp/$name.log" "$CHM_TEST_EXPORT/"
     fi

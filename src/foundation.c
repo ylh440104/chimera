@@ -1826,13 +1826,38 @@ static const char *directory_suffix(unsigned long dir, unsigned long domains)
     }
 }
 
+static void *home_location(const char *suffix, int expand)
+{
+    const char *base = "~", *prefix = "";
+    if (expand) {
+        base = getenv("HOME");
+        if (!base || *base != '/') base = "/var/mobile";
+        if (path_below(base, g_sandbox_root)) {
+            base += strlen(g_sandbox_root);
+            prefix = "/var";
+        }
+    }
+    char path[2048];
+    int len = snprintf(path, sizeof(path), "%s%s", prefix, base);
+    if (len <= 0 || (size_t)len >= sizeof(path)) return NULL;
+    while (len > 1 && path[len - 1] == '/') path[--len] = 0;
+    if (suffix) {
+        size_t available = sizeof(path) - (size_t)len;
+        int n = snprintf(path + len, available, "%s%s", path[len - 1] == '/' ? "" : "/", suffix);
+        if (n < 0 || (size_t)n >= available) return NULL;
+    }
+    return fo_string_new(path);
+}
+
+void *chm_foundation_home_directory(void)
+{
+    return home_location(NULL, 1);
+}
+
 static void *directory_path(unsigned long dir, unsigned long domains, int expand)
 {
     const char *suffix = directory_suffix(dir, domains);
-    if (!suffix) return NULL;
-    char path[128];
-    snprintf(path, sizeof(path), "%s/%s", expand ? "/var/mobile" : "~", suffix);
-    return fo_string_new(path);
+    return suffix ? home_location(suffix, expand) : NULL;
 }
 
 void *chm_foundation_search_paths(unsigned long dir, unsigned long domains, signed char expand)
