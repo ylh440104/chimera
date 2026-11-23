@@ -1,9 +1,12 @@
 typedef struct net_object {
     void *object, *url, *body, *headers, *handler;
+    void *progress, *update, *destination, *manager, *response;
+    char *temporary;
+    int64_t expected;
     char *address, *method, *header_json;
     double timeout;
     uint64_t token;
-    int state, status, cancelled;
+    int state, status, cancelled, download, custom_timeout;
     struct net_object *next;
 } net_object;
 static net_object *net_objects;
@@ -72,11 +75,21 @@ static void request_header(void *self, const char *sel, void *value, void *field
 }
 static void request_timeout(void *self, const char *sel, double timeout)
 {
-    (void)sel; net_object *n = net_find(self); if (n && isfinite(timeout) && timeout > 0) n->timeout = fmin(timeout, 300);
+    (void)sel; net_object *n = net_find(self);
+    if (n && isfinite(timeout) && timeout > 0) { n->timeout = fmin(timeout, 300); n->custom_timeout = 1; }
 }
 static void *session_shared(void) { return singleton("__url_session", "NSURLSession"); }
-static void *session_configuration(void) { return singleton("__url_configuration", "NSURLSessionConfiguration"); }
-static void *session_configured(void *cls, const char *sel, void *config) { (void)cls; (void)sel; (void)config; return fo_alloc("NSURLSession", 0); }
+static void *session_configuration(void)
+{
+    net_object *n = net_new("NSURLSessionConfiguration");
+    return n ? n->object : NULL;
+}
+static void *session_configured(void *cls, const char *sel, void *config)
+{
+    (void)cls; (void)sel; net_object *s = net_new("NSURLSession"), *c = net_find(config);
+    if (s && c) s->timeout = c->timeout;
+    return s ? s->object : NULL;
+}
 static void *session_task(void *self, const char *sel, void *request, void *handler)
 {
     (void)self;
@@ -99,13 +112,20 @@ static void task_resume(void *self, const char *sel)
 static void task_cancel(void *self, const char *sel)
 {
     (void)sel; net_object *n = net_find(self);
-    if (n && n->state != 3) { n->cancelled = 1; n->state = 2; }
+    if (n && n->state != 3) {
+        n->cancelled = 1;
+        if (n->state != 4) n->state = 2;
+    }
 }
 static long task_state(void *self, const char *sel)
 {
     net_object *n = net_find(self); if (!n) return 0;
     return !strcmp(sel, "statusCode") ? n->status : !strcmp(sel, "taskIdentifier") ? (long)n->token : n->state == 4 ? 0 : n->state;
 }
+
+static int download_prepare(net_object *n);
+static void download_discard(net_object *n);
+static int download_finish(net_object *n, int status, const char *headers, const char *failure);
 
 int chm_network_next(chm_network_request *request)
 {
@@ -115,12 +135,17 @@ int chm_network_next(chm_network_request *request)
         int cancelled = n->state == 2;
         n->state = 4;
         fo_buffer b = {0};
+        int fd = n->download && !cancelled ? download_prepare(n) : -1;
+        if (n->download && !cancelled && fd < 0)
+            chm_session_log(g_session, "download: temporary file unavailable errno=%d", errno);
         if (!json_encode(&b, n->headers, 0)) { free(b.data); b.data = strdup("{}"); }
         free(n->header_json); n->header_json = b.data;
         *request = (chm_network_request){n->token, n->address, n->method, n->header_json,
             fo_is_data(n->body) ? ((fo_data *)n->body)->bytes : NULL,
             fo_is_data(n->body) ? (size_t)((fo_data *)n->body)->length : 0,
-            (int)(n->timeout * 1000), cancelled};
+            (int)(n->timeout * 1000), cancelled, !!n->download, fd};
+        if (n->download) chm_session_log(g_session, "download: token=%llu %s",
+            (unsigned long long)n->token, cancelled ? "cancelled" : "submitted");
         return 1;
     }
     return 0;
@@ -131,6 +156,7 @@ static int network_deliver(uint64_t token, int status, const void *bytes, size_t
     net_object *n = net_objects;
     while (n && n->token != token) n = n->next;
     if (!n || n->state == 3 || length > 32u * 1024u * 1024u) return 0;
+    if (n->download) return download_finish(n, status, headers, failure);
     int cancelled = n->cancelled;
     n->state = 3;
     void *error = cancelled || (failure && *failure) ? make_error("NSURLErrorDomain", cancelled ? -999 : -1004, cancelled ? "Request cancelled" : failure) : NULL;
@@ -164,6 +190,8 @@ static void network_shutdown(void)
 {
     while (net_objects) {
         net_object *next = net_objects->next;
+        download_discard(net_objects);
+        chm_block_release(net_objects->update); chm_block_release(net_objects->destination);
         chm_block_release(net_objects->handler);
         free(net_objects->address); free(net_objects->method); free(net_objects->header_json); free(net_objects); net_objects = next;
     }

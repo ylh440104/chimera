@@ -23,7 +23,10 @@ class Native {
         external fun ready(): Boolean
 
         @JvmStatic
-        external fun render(width: Int, height: Int): IntArray?
+        external fun tick(nanos: Long, period: Double): Int
+
+        @JvmStatic
+        external fun transferProgress(token: Long, done: Long, total: Long): Int
 
         @JvmStatic
         external fun paint(target: FramePainter, width: Int, height: Int): Int

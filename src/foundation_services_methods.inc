@@ -84,4 +84,5 @@
     { "currentDevice", (void *)device_current },
     { "model", (void *)device_model },
     { "localizedModel", (void *)device_model },
+    { "mainRunLoop", (void *)main_run_loop },
     { "null", (void *)null_object },

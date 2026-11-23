@@ -62,6 +62,7 @@ class GuestImageView(context: Context) : View(context) {
             Log.i("chimera", "render: hardwareCanvas=$accelerated bitmapRaster=false")
             post { if (isAttachedToWindow) onBackend?.invoke(accelerated) }
         }
+        if (!accelerated) return
         val saved = canvas.save()
         try {
             canvas.translate(v[0], v[1])

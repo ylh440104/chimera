@@ -27,30 +27,49 @@ class MainActivity : AppCompatActivity() {
     @Volatile private var serviceEpoch = 0L
     private var editorToken = 0L
     private var editor: androidx.appcompat.app.AlertDialog? = null
-    private val eventHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    private val eventTick = object : Runnable {
-        override fun run() {
-            if (closed) return
-            if (!busy && guestLive && editorToken == 0L) {
-                val epoch = serviceEpoch
-                val needsFirstFrame = frame == null
-                Native.executor.execute {
-                    try {
-                        if (!closed && epoch == serviceEpoch) {
-                            val count = Native.pump()
-                            check(count >= 0) { "客机异步回调异常" }
-                            if (count > 0 || needsFirstFrame) drawGuestFrame(epoch)
-                            else serviceOutputs(epoch)
+    private val choreographer by lazy { android.view.Choreographer.getInstance() }
+    @Volatile private var foreground = false
+    private var frameScheduled = false
+    private var tickInFlight = false
+    private var servicesChanged = false
+    private var lastTransferReport = 0L
+    private var networkInFlight = 0
+    private var gpuAvailable = true
+    private val frameCallback = android.view.Choreographer.FrameCallback { nanos -> onVsync(nanos) }
 
-                        }
-                    } catch (e: Exception) {
-                        log("异步处理失败：$e")
-                        runOnUiThread { guestLive = false; buttons() }
-                    } finally {
-                        if (!closed) eventHandler.postDelayed(this, 200)
-                    }
+    private fun scheduleFrame() {
+        val wanted = foreground && !closed && !busy && guestLive && gpuAvailable && editorToken == 0L
+        if (wanted && !frameScheduled && !tickInFlight) {
+            frameScheduled = true
+            choreographer.postFrameCallback(frameCallback)
+        } else if (!wanted && frameScheduled) {
+            frameScheduled = false
+            choreographer.removeFrameCallback(frameCallback)
+        }
+    }
+
+    private fun onVsync(nanos: Long) {
+        frameScheduled = false
+        if (!foreground || closed || busy || !guestLive || !gpuAvailable || editorToken != 0L) return
+        val epoch = serviceEpoch
+        val first = frame == null
+        val hz = frameView.display?.refreshRate?.takeIf { it > 0 && it.isFinite() } ?: 60f
+        tickInFlight = true
+        Native.executor.execute {
+            try {
+                if (foreground && !closed && epoch == serviceEpoch) {
+                    val callbacks = Native.tick(nanos, 1.0 / hz)
+                    check(callbacks >= 0) { "客机显示或队列回调异常" }
+                    if (first || callbacks > 0 || servicesChanged) {
+                        servicesChanged = false
+                        drawGuestFrame(epoch, diagnostic = first)
+                    } else serviceOutputs(epoch)
                 }
-            } else eventHandler.postDelayed(this, 200)
+            } catch (e: Exception) {
+                failGuest(epoch, "刷新失败", e)
+            } finally {
+                runOnUiThread { tickInFlight = false; scheduleFrame() }
+            }
         }
     }
 
@@ -81,9 +100,11 @@ class MainActivity : AppCompatActivity() {
                 if (!closed && panEpoch == serviceEpoch) panQueue.offer(PanEvent(panEpoch, phase, x, y))
             }
             onBackend = { hardware ->
-                log(if (hardware) "屏幕绘制：GPU 硬件 Canvas" else "屏幕绘制：软件 Canvas")
+                gpuAvailable = hardware
+                buttons()
+                log(if (hardware) "GPU 硬件 Canvas · 屏幕同步刷新" else "当前窗口不支持硬件 Canvas，已暂停客机绘制")
                 Native.executor.execute {
-                    File(filesDir, "render-backend.txt").writeText("hardwareCanvas=$hardware\nbitmapRaster=false\n")
+                    File(filesDir, "render-backend.txt").writeText("hardwareCanvas=$hardware\nbitmapRaster=false\nframeClock=Choreographer\n")
                 }
             }
         }
@@ -98,7 +119,7 @@ class MainActivity : AppCompatActivity() {
         root.addView(frameView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 2f))
         root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(root)
-        eventHandler.postDelayed(eventTick, 200)
+
     }
 
     private fun log(text: String) {
@@ -115,7 +136,8 @@ class MainActivity : AppCompatActivity() {
     private fun buttons() {
         openButton.isEnabled = !busy
         runButton.isEnabled = !busy && ready && !executed
-        frameView.acceptInput = !closed && !busy && guestLive && frameView.hasFrame
+        frameView.acceptInput = foreground && !closed && !busy && guestLive && gpuAvailable && frameView.hasFrame
+        scheduleFrame()
     }
 
     private fun importAndLoad(uri: Uri) {
@@ -137,6 +159,8 @@ class MainActivity : AppCompatActivity() {
             var loaded = false
             try {
                 if (!closed) {
+                    servicesChanged = false
+                    lastTransferReport = 0L
                     Native.release()
                     val staging = File(cacheDir, "staging")
                     check(staging.isDirectory || staging.mkdirs())
@@ -273,23 +297,51 @@ class MainActivity : AppCompatActivity() {
         return true
     }
 
+    private fun failGuest(epoch: Long, label: String, e: Exception) {
+        if (closed || epoch != serviceEpoch) return
+        val report = Native.report()
+        runCatching { File(filesDir, "last-report.txt").writeText(report) }
+        runOnUiThread {
+            if (!closed && epoch == serviceEpoch) {
+                guestLive = false
+                buttons()
+                log("$label：$e\n$report")
+            }
+        }
+    }
+
     private fun serviceOutputs(epoch: Long) {
-        while (!closed && epoch == serviceEpoch) {
+        while (!closed && epoch == serviceEpoch && networkInFlight < 4) {
             val request = Native.nextRequest() ?: break
-            GuestNetwork.send(request) { result ->
-                if (!closed && epoch == serviceEpoch) {
+            networkInFlight++
+            val active = { !closed && epoch == serviceEpoch }
+            GuestNetwork.send(request, active, { done, total ->
+                if (!active()) false else Native.executor.submit<Boolean> {
+                    if (!active()) false else {
+                        val rc = Native.transferProgress(request.token, done, total)
+                        if (rc < 0) failGuest(epoch, "下载进度回调异常", IllegalStateException("$rc"))
+                        if (rc > 0) servicesChanged = true
+                        rc > 0
+                    }
+                }.get()
+            }) { result ->
+                networkInFlight--
+                if (active()) {
                     try {
-                        val rc = Native.completeRequest(result.request.token, result.status, result.body, result.headers, result.error)
+                        val rc = Native.completeRequest(request.token, result.status, result.body, result.headers, result.error)
                         check(rc >= 0) { "网络完成回调异常" }
                         if (rc > 0) {
-                            check(Native.pump() >= 0)
-                            drawGuestFrame(epoch)
-                            File(filesDir, "last-report.txt").writeText(Native.report())
+                            servicesChanged = true
+                            val now = android.os.SystemClock.elapsedRealtime()
+                            val failed = result.error.isNotEmpty() || result.status >= 400
+                            if (failed) log("请求 #${request.token} 失败（HTTP ${result.status}）${result.error}")
+                            if (failed || now - lastTransferReport > 1000 || networkInFlight == 0) {
+                                File(filesDir, "last-report.txt").writeText(Native.report())
+                                lastTransferReport = now
+                            }
+                            if (foreground) serviceOutputs(epoch)
                         }
-                    } catch (e: Exception) {
-                        log("网络回调失败：$e")
-                        runOnUiThread { guestLive = false; buttons() }
-                    }
+                    } catch (e: Exception) { failGuest(epoch, "网络回调失败", e) }
                 }
             }
         }
@@ -407,10 +459,22 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        foreground = true
+        buttons()
+    }
+
+    override fun onPause() {
+        foreground = false
+        buttons()
+        super.onPause()
+    }
+
     override fun onDestroy() {
         closed = true
         serviceEpoch++
-        eventHandler.removeCallbacks(eventTick)
+        scheduleFrame()
         editor?.dismiss()
         editor = null
         Native.executor.execute { Native.release() }

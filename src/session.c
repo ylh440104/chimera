@@ -330,6 +330,12 @@ void chm_session_log(chm_session *s, const char *fmt, ...)
     chm_format(line, sizeof(line), fmt, ap);
     va_end(ap);
     size_t n = strlen(line);
+    if (s->log_len + n + 2 >= s->log_cap && n + 2 < s->log_cap) {
+        const char *cut = strchr(s->log_buf + s->log_len / 4, '\n');
+        size_t drop = cut ? (size_t)(cut + 1 - s->log_buf) : s->log_len;
+        memmove(s->log_buf, s->log_buf + drop, s->log_len - drop + 1);
+        s->log_len -= drop;
+    }
     if (s->log_len + n + 2 < s->log_cap) {
         memcpy(s->log_buf + s->log_len, line, n);
         s->log_len += n;
@@ -463,7 +469,7 @@ void chm_session_report(chm_session *s, char *out, size_t cap)
     if (!s || !out || !cap) return;
     chm_guest_lock();
     out[0] = 0;
-    snprintf(out, cap, "%s", s->log_buf ? s->log_buf : "");
+    snprintf(out, cap, "%s%s%s", s->fault[0] ? s->fault : "", s->fault[0] ? "\n" : "", s->log_buf ? s->log_buf : "");
     if (s->missing_count > 0) {
         size_t used = strlen(out);
         snprintf(out + used, cap - used, "missing distinct=%d:", s->missing_count);

@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "chm_session.h"
 
@@ -138,23 +139,13 @@ JNIEXPORT jboolean JNICALL Java_dev_chimera_app_Native_ready(JNIEnv *env, jclass
     return g_session && g_session->prepared && g_session->images[0].executable;
 }
 
-JNIEXPORT jintArray JNICALL Java_dev_chimera_app_Native_render(JNIEnv *env, jclass cls, jint width, jint height)
+JNIEXPORT jint JNICALL Java_dev_chimera_app_Native_tick(JNIEnv *env, jclass cls, jlong nanos, jdouble period)
 {
-    (void)cls;
-    if (!g_session || !chm_ui_running() || g_session->exit_code != 0 ||
-        width <= 0 || height <= 0 || width > 2048 || height > 2048)
-        return NULL;
-    size_t count = (size_t)width * (size_t)height;
-    uint32_t *pixels = calloc(count, sizeof(*pixels));
-    if (!pixels) return NULL;
-    if (chm_ui_render(pixels, width, height) != 1) {
-        free(pixels);
-        return NULL;
-    }
-    jintArray out = (*env)->NewIntArray(env, (jsize)count);
-    if (out) (*env)->SetIntArrayRegion(env, out, 0, (jsize)count, (const jint *)pixels);
-    free(pixels);
-    return out;
+    (void)env; (void)cls;
+    if (!g_session || g_session->exit_code < 0) return -1;
+    size_t jobs = chm_dispatch_pump(g_session);
+    int links = chm_ui_vsync((double)nanos / 1e9, period);
+    return links < 0 ? links : (jint)(jobs + (size_t)links);
 }
 
 typedef struct {
@@ -214,7 +205,7 @@ JNIEXPORT jint JNICALL Java_dev_chimera_app_Native_paint(JNIEnv *env, jclass cls
     paint_context context = {env, target, draw, 0, 0, 0};
     int rc = chm_ui_paint(draw_to_android, &context, width, height);
     if (context.failed) rc = -1;
-    if (rc != 0) chm_session_log(g_session, "paint: rectangles=%zu text_commands=%zu result=%d",
+    if (rc < 0) chm_session_log(g_session, "paint: rectangles=%zu text_commands=%zu result=%d",
                                  context.rectangles, context.texts, rc);
     return rc;
 }

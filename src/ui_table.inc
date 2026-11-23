@@ -292,7 +292,8 @@ static void table_update(ui_view *view)
         row->view->y = row->top;
         row->view->w = fmax(0, view->w - (row->header ? 32 : 0));
         row->view->h = row->height;
-        if (row->view->cell) cell_layout(row->view->cell);
+        if (row->view->cell && row->top + row->height > view->offset.y && row->top < view->offset.y + view->h)
+            cell_layout(row->view->cell);
     }
 }
 

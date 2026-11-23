@@ -112,6 +112,7 @@ void chm_objc_dump_trace(chm_session *s);
 const char *chm_objc_class_name(void *cls);
 void *chm_objc_get_class(const char *name);
 
+int chm_is_block(void *object);
 void *chm_block_copy(void *object);
 void chm_block_release(void *object);
 void chm_blocks_reset(void);
@@ -125,6 +126,7 @@ unsigned chm_guest_suspend(void);
 void chm_guest_resume(unsigned depth);
 void chm_dispatch_init(void);
 void *chm_dispatch_lookup(const char *name);
+int chm_ui_vsync(double timestamp, double period);
 size_t chm_dispatch_pump(chm_session *s);
 size_t chm_dispatch_pending(void);
 
@@ -147,8 +149,10 @@ typedef struct {
     const void *body;
     size_t body_size;
     int timeout_ms, cancelled;
+    int download, download_fd;
 } chm_network_request;
 int chm_network_next(chm_network_request *request);
+int chm_network_progress(uint64_t token, int64_t done, int64_t total);
 int chm_network_complete(uint64_t token, int status, const void *bytes, size_t length, const char *headers, const char *failure);
 int chm_foundation_map_path(const char *in, char *out, size_t cap);
 int chm_foundation_map_mutable(const char *in, char *out, size_t cap);

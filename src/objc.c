@@ -60,6 +60,11 @@ static uint8_t g_empty_cache[64];
 static uint8_t g_block_isa[64];
 static uint8_t g_cfstr_isa[64];
 
+int chm_is_block(void *object)
+{
+    return object && *(void **)object == g_block_isa;
+}
+
 static chm_class_ro *ro_of(chm_objc_class *c)
 {
     if (!c)

@@ -22,7 +22,7 @@ typedef struct ui_action {
 
 typedef struct ui_view {
     void *object;
-    struct ui_view *next;
+    struct ui_view *next, *hash_next;
     void *scene;
     double x;
     double y;
@@ -194,6 +194,7 @@ static void container_layout(ui_vc *vc);
 static void controller_appearance(ui_vc *vc, int appearing, int animated);
 
 static ui_view *views;
+static ui_view *view_index[2048];
 static ui_vc *controllers;
 
 typedef struct ui_app {
@@ -238,9 +239,11 @@ static uint32_t argb(double r, double g, double b, double a)
 
 static ui_view *as_view(void *p)
 {
-    if (!p || !chm_objc_is_kind(p, "UIView")) return NULL;
-    for (ui_view *v = views; v; v = v->next)
+    if (!p) return NULL;
+    size_t bucket = ((uintptr_t)p >> 4) & 2047;
+    for (ui_view *v = view_index[bucket]; v; v = v->hash_next)
         if (v->object == p) return v;
+    if (!chm_objc_is_kind(p, "UIView")) return NULL;
     ui_view *v = calloc(1, sizeof(*v));
     if (!v) return NULL;
     v->object = p;
@@ -254,6 +257,7 @@ static ui_view *as_view(void *p)
     v->interactive = !chm_objc_is_kind(p, "UILabel") && !chm_objc_is_kind(p, "UIImageView");
     v->next = views;
     views = v;
+    v->hash_next = view_index[bucket]; view_index[bucket] = v;
     return v;
 }
 
@@ -1411,6 +1415,7 @@ int chm_ui_view_count(void)
 #include "ui_widgets.inc"
 #include "ui_dialog.inc"
 #include "ui_input.inc"
+#include "ui_display_link.inc"
 
 static const struct {
     const char *sel;
@@ -1522,8 +1527,10 @@ void chm_ui_shutdown(chm_session *s)
     input_reset();
     g_modal = NULL;
     dialogs_shutdown();
+    clock_reset();
     tables_shutdown();
     symbols_reset();
+    memset(view_index, 0, sizeof(view_index));
     while (views) {
         ui_view *next = views->next;
         free(views->kids);
@@ -1570,6 +1577,7 @@ void chm_ui_init(chm_session *s)
     if (!s) return;
     chm_ui_shutdown(g_sess);
     g_sess = s;
+    chm_objc_register_host(s, clock_methods, sizeof(clock_methods) / sizeof(*clock_methods));
     chm_objc_register_host(s, image_methods, sizeof(image_methods) / sizeof(*image_methods));
     static const chm_host_method cell_image = {"UITableViewCell", "imageView", "@@:", cell_part, 0};
     chm_objc_register_host(s, &cell_image, 1);

@@ -59,7 +59,7 @@ jobs:
           for tool in chmdump chmdemand chimera_run; do
             cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -pthread -Iinclude -Ithird_party/yxml -o "$tool" "tools/$tool.c" $SRC -lm -ldl -lz
           done
-          for test in test_input test_table test_services test_startup; do
+          for test in test_input test_table test_services test_startup test_transfer probe_version; do
             cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -pthread -Iinclude -Ithird_party/yxml -o "$test" "tests/$test.c" $SRC -lm -ldl -lz
           done
           ./chmdump tests/fixture.ios > dump.txt
@@ -103,6 +103,11 @@ jobs:
           mkdir -p abi-results/startup-root
           CHM_SANDBOX_ROOT="$PWD/abi-results/startup-root" timeout 30 ./test_startup "$PWD/abi-results/darwin_startup" > abi-results/startup.log 2>&1 || { cat abi-results/startup.log; exit 1; }
           cat abi-results/startup.log
+          clang-18 -target arm64-apple-ios15.0 -O2 -fblocks -fno-objc-arc -fno-builtin -fno-stack-protector -c tests/darwin_transfer.m -o abi-results/darwin_transfer.o
+          ld64.lld-18 -arch arm64 -platform_version ios 15.0 15.0 -e _main -fixup_chains -exported_symbol _transfer_check -undefined dynamic_lookup -o abi-results/darwin_transfer abi-results/darwin_transfer.o
+          mkdir -p abi-results/transfer-root
+          CHM_SANDBOX_ROOT="$PWD/abi-results/transfer-root" timeout 60 ./test_transfer "$PWD/abi-results/darwin_transfer" > abi-results/transfer.log 2>&1 || { cat abi-results/transfer.log; exit 1; }
+          cat abi-results/transfer.log
 
       - uses: actions/upload-artifact@v4
         with:
@@ -129,6 +134,9 @@ jobs:
             abi-results/services.log
             abi-results/startup.log
             abi-results/darwin_startup
+            abi-results/transfer.log
+            abi-results/darwin_transfer
+
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
@@ -145,4 +153,6 @@ jobs:
             test_table
             test_services
             test_startup
+            test_transfer
+            probe_version
           if-no-files-found: error

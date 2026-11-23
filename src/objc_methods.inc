@@ -133,7 +133,17 @@ void chm_objc_index_methods(chm_session *s)
     for (int i = 0; i < s->class_count; i++) {
         chm_objc_cls_entry *e = &s->classes[i];
         chm_image *img = &s->images[e->image_index];
-        if (!img->executable) continue;
+        if (!img->executable) {
+            if (strcmp(e->name, "AFURLSessionManager")) continue;
+            void *known = chm_foundation_lookup_class(e->name);
+            if (known && e->cls && e->cls != known) {
+                for (size_t b = 0; b < METHOD_BUCKETS; b++) {
+                    for (objc_method *m = s->objc_methods->bucket[b]; m; m = m->next)
+                        if (m->owner == known) method_put(s, e->cls, m->name, m->types, m->imp);
+                }
+            }
+            continue;
+        }
         index_class_methods(s, img, e->cls);
         index_class_methods(s, img, e->meta);
     }

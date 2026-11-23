@@ -270,8 +270,13 @@ static void emit_cstr(chm_sink *s, const char *p, int width, int prec, int left)
         sink_pad(s, ' ', pad);
 }
 
+#include "format_indices.inc"
+
 static void format_to(chm_sink *sink, const char *fmt, chm_args *args)
 {
+    const unsigned char *base = args->slots;
+    int indexed = !args->host ? format_indices(fmt) : 0;
+    if (indexed < 0 || (indexed && !base)) { sink->failed = 1; errno = EINVAL; return; }
     while (*fmt && !sink->failed && !args->failed) {
         int left = 0;
         int plus = 0;
@@ -288,6 +293,7 @@ static void format_to(chm_sink *sink, const char *fmt, chm_args *args)
             continue;
         }
         fmt++;
+        int argument = indexed ? slot_index(&fmt) : 0;
 
         for (;;) {
             if (*fmt == '-')
@@ -306,12 +312,14 @@ static void format_to(chm_sink *sink, const char *fmt, chm_args *args)
         }
 
         if (*fmt == '*') {
+            fmt++;
+            int position = indexed ? slot_index(&fmt) : 0;
+            if (position > 0) args->slots = base + 8u * (unsigned)(position - 1);
             width = NEXT(args, int);
             if (width < 0) {
                 left = 1;
-                width = -width;
+                width = width == INT_MIN ? INT_MAX : -width;
             }
-            fmt++;
         } else {
             while (*fmt >= '0' && *fmt <= '9') {
                 if (width < 100000)
@@ -324,10 +332,12 @@ static void format_to(chm_sink *sink, const char *fmt, chm_args *args)
             fmt++;
             prec = 0;
             if (*fmt == '*') {
+                fmt++;
+                int position = indexed ? slot_index(&fmt) : 0;
+                if (position > 0) args->slots = base + 8u * (unsigned)(position - 1);
                 prec = NEXT(args, int);
                 if (prec < 0)
                     prec = -1;
-                fmt++;
             } else {
                 while (*fmt >= '0' && *fmt <= '9') {
                     if (prec < 100000)
@@ -368,6 +378,7 @@ static void format_to(chm_sink *sink, const char *fmt, chm_args *args)
             lmod = 8;
         }
 
+        if (argument > 0) args->slots = base + 8u * (unsigned)(argument - 1);
         conv = *fmt;
         if (!conv) {
             sink_putc(sink, '%');

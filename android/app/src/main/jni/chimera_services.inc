@@ -48,15 +48,22 @@ static jobject copy_next_request(JNIEnv *env)
     if (!g_session || g_session->exit_code == -2) return NULL;
     chm_network_request request;
     if (!chm_network_next(&request)) return NULL;
+    jobject result = NULL;
     jclass type = (*env)->FindClass(env, "dev/chimera/app/NetworkRequest");
-    if (!type) return NULL;
-    jmethodID init = (*env)->GetMethodID(env, type, "<init>", "(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;[BIZ)V");
+    if (!type) goto finished;
+    jmethodID init = (*env)->GetMethodID(env, type, "<init>", "(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;[BIZZI)V");
+    if (!init) goto finished;
     jstring url = (*env)->NewStringUTF(env, request.url ? request.url : "");
     jstring method = (*env)->NewStringUTF(env, request.method ? request.method : "GET");
     jstring headers = (*env)->NewStringUTF(env, request.headers ? request.headers : "{}");
     jbyteArray body = bytes_to_java(env, request.body, request.body_size);
-    if (!init || !url || !method || !headers || !body || (*env)->ExceptionCheck(env)) return NULL;
-    return (*env)->NewObject(env, type, init, (jlong)request.token, url, method, headers, body, (jint)request.timeout_ms, (jboolean)request.cancelled);
+    if (url && method && headers && body && !(*env)->ExceptionCheck(env)) {
+        result = (*env)->NewObject(env, type, init, (jlong)request.token, url, method, headers, body,
+            (jint)request.timeout_ms, (jboolean)request.cancelled, (jboolean)request.download, (jint)request.download_fd);
+    }
+finished:
+    if (!result && request.download_fd >= 0) close(request.download_fd);
+    return result;
 }
 JNIEXPORT jobject JNICALL Java_dev_chimera_app_Native_nextRequest(JNIEnv *env, jclass cls)
 {
@@ -66,17 +73,22 @@ JNIEXPORT jobject JNICALL Java_dev_chimera_app_Native_nextRequest(JNIEnv *env, j
     chm_guest_unlock();
     return result;
 }
+JNIEXPORT jint JNICALL Java_dev_chimera_app_Native_transferProgress(JNIEnv *env, jclass cls, jlong token, jlong done, jlong total)
+{
+    (void)env; (void)cls;
+    return chm_network_progress((uint64_t)token, done, total);
+}
 JNIEXPORT jint JNICALL Java_dev_chimera_app_Native_completeRequest(JNIEnv *env, jclass cls, jlong token, jint status, jbyteArray body, jstring headers, jstring error)
 {
     (void)cls;
     if (!g_session || !body || !headers || !error) return -1;
     jsize length = (*env)->GetArrayLength(env, body);
     if (length > 32 * 1024 * 1024) return -1;
-    jbyte *bytes = (*env)->GetByteArrayElements(env, body, NULL);
+    jbyte *bytes = length ? (*env)->GetByteArrayElements(env, body, NULL) : NULL;
     const char *fields = (*env)->GetStringUTFChars(env, headers, NULL);
     const char *failure = (*env)->GetStringUTFChars(env, error, NULL);
     int rc = -1;
-    if (bytes && fields && failure) rc = chm_network_complete((uint64_t)token, status, bytes, (size_t)length, fields, failure);
+    if ((!length || bytes) && fields && failure) rc = chm_network_complete((uint64_t)token, status, bytes, (size_t)length, fields, failure);
     if (failure) (*env)->ReleaseStringUTFChars(env, error, failure);
     if (fields) (*env)->ReleaseStringUTFChars(env, headers, fields);
     if (bytes) (*env)->ReleaseByteArrayElements(env, body, bytes, JNI_ABORT);

@@ -258,6 +258,7 @@ static uint64_t process_memory(void *self, const char *sel)
 }
 static void *device_current(void) { return singleton("__device", "UIDevice"); }
 static void *device_model(void *self, const char *sel) { (void)self; (void)sel; return fo_string_new("Chimera Android"); }
+static void *main_run_loop(void) { return singleton("__main_run_loop", "NSRunLoop"); }
 static void *null_object(void) { return singleton("__null", "NSNull"); }
 static void services_shutdown(void)
 {

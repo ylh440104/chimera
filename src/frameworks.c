@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 static uint64_t g_task_self;
 static uint64_t g_stack_guard;
@@ -250,8 +251,11 @@ static void objc_setProperty_impl(void *self, const char *sel, void *value, long
 
 static void objc_setProperty_copy_impl(void *self, const char *sel, void *value, long offset)
 {
-    void *copy = value ? chm_objc_send0(value, "copy") : NULL;
+    if (!self || offset < 0) return;
+    void *old = *(void **)((char *)self + offset);
+    void *copy = chm_is_block(value) ? chm_block_copy(value) : value ? chm_objc_send0(value, "copy") : NULL;
     objc_setProperty_impl(self, sel, copy, offset);
+    if (chm_is_block(old)) chm_block_release(old);
 }
 
 static void objc_copyStruct_impl(void *dst, const void *src, long size, int atomic, int hasStrong)
@@ -315,18 +319,12 @@ static void *objc_exception_throw_impl(void *exc)
     return exc;
 }
 
-static unsigned long CC_SHA1_impl(const void *data, unsigned int len, unsigned char *md)
-{
-    (void)data;
-    (void)len;
-    if (md)
-        memset(md, 0, 20);
-    return md ? 20 : 0;
-}
+#include "sha1.inc"
 
-static void *CACurrentMediaTime_impl(void)
+static double CACurrentMediaTime_impl(void)
 {
-    return NULL;
+    struct timespec now;
+    return clock_gettime(CLOCK_MONOTONIC, &now) ? 0.0 : (double)now.tv_sec + (double)now.tv_nsec / 1e9;
 }
 
 typedef struct {

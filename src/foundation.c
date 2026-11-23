@@ -150,6 +150,7 @@ static const struct {
     { "NSURLSession", "NSObject", 32 },
     { "NSURLSessionConfiguration", "NSObject", 32 },
     { "NSURLSessionTask", "NSObject", 32 },
+    { "NSURLSessionDownloadTask", "NSURLSessionTask", 32 },
     { "NSError", "NSObject", 32 },
     { "NSException", "NSObject", 32 },
     { "NSBundle", "NSObject", 32 },
@@ -948,8 +949,15 @@ void *chm_ns_append_format_list(void *self, const char *sel, void *fmt, const vo
     if (joined) {
         memcpy(joined, prefix, n);
         memcpy(joined + n, text, len + 1);
-        str = fo_string_new(joined);
-        free(joined);
+        if (!strcmp(sel, "appendFormat:") && fo_is_string(self) && chm_objc_is_kind(self, "NSMutableString")) {
+            fo_string *mutable = self;
+            free(mutable->bytes);
+            mutable->bytes = joined; mutable->length = (int64_t)(n + len);
+            str = self;
+        } else {
+            str = fo_string_new(joined);
+            free(joined);
+        }
     }
     free(text);
     return str;
@@ -2215,6 +2223,9 @@ static void *bundle_id(void *self, const char *sel)
 #include "foundation_constants.inc"
 #include "foundation_services.inc"
 #include "foundation_file_values.inc"
+#include "foundation_filter.inc"
+#include "foundation_progress.inc"
+#include "foundation_download.inc"
 
 static const struct {
     const char *sel;
@@ -2409,6 +2420,9 @@ void chm_foundation_init(chm_session *s)
             g_classes[g_class_count++] = c;
     }
     chm_objc_register_host(s, file_value_methods, sizeof(file_value_methods) / sizeof(*file_value_methods));
+    chm_objc_register_host(s, filter_methods, sizeof(filter_methods) / sizeof(*filter_methods));
+    chm_objc_register_host(s, progress_methods, sizeof(progress_methods) / sizeof(*progress_methods));
+    chm_objc_register_host(s, download_methods, sizeof(download_methods) / sizeof(*download_methods));
     for (k = 0; g_methods[k].sel; k++) {
         chm_method_reg m;
 
@@ -2428,6 +2442,7 @@ void chm_foundation_shutdown(void)
 {
     int i;
     services_shutdown();
+    progress_reset();
     constants_reset();
 
     for (i = 0; i < g_class_count; i++) {

@@ -244,6 +244,7 @@ int chm_session_callback(chm_session *s, int (*body)(void *), void *context)
                  dp.dli_fname ? dp.dli_fname : "?", (unsigned long long)poff, pnm,
                  dl.dli_fname ? dl.dli_fname : "?", (unsigned long long)loff, lnm);
     }
+    snprintf(s->fault, sizeof(s->fault), "%s", g_fault);
     chm_session_log(s, "%s", g_fault);
     describe_pc(s, g_pc);
     dump_stack(s, g_sp);

@@ -70,6 +70,7 @@ chm_objc_msgSendSuper2_trampoline:
     .size \name, .-\name
 .endm
 
+DARWIN_ENTRY chm_predicate_entry, x3, chm_predicate_list
 DARWIN_ENTRY chm_ns_format_entry, x3, chm_ns_format_list
 DARWIN_ENTRY chm_ns_append_format_entry, x3, chm_ns_append_format_list
 DARWIN_ENTRY chm_printf_entry, x1, chm_printf_list
