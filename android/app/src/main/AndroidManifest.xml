@@ -12,6 +12,12 @@
 
         <activity
             android:name=".MainActivity"
+            android:exported="false"
+            android:process=":guest"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
+        <activity
+            android:name=".LibraryActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

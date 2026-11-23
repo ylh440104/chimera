@@ -1,6 +1,6 @@
 package dev.chimera.app
 
-import android.net.Uri
+import android.content.Intent
 import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
@@ -8,10 +8,8 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import java.io.File
-import java.util.zip.ZipFile
 
 class MainActivity : AppCompatActivity() {
     private lateinit var logView: TextView
@@ -73,9 +71,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private val picker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
-        if (uri != null) importAndLoad(uri)
-    }
+    private var lease: AppLease? = null
+    private lateinit var appKey: String
+    private val library by lazy { AppLibrary(filesDir, cacheDir) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -83,8 +81,8 @@ class MainActivity : AppCompatActivity() {
         root.orientation = LinearLayout.VERTICAL
         root.setPadding(32, 64, 32, 24)
         openButton = Button(this).apply {
-            text = "导入 IPA"
-            setOnClickListener { picker.launch(arrayOf("*/*")) }
+            text = "‹ 应用库"
+            setOnClickListener { finish() }
         }
         runButton = Button(this).apply {
             text = "运行"
@@ -119,7 +117,14 @@ class MainActivity : AppCompatActivity() {
         root.addView(frameView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 2f))
         root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(root)
-
+        val key = intent.getStringExtra("app_key")
+        if (key == null) {
+            startActivity(Intent(this, LibraryActivity::class.java))
+            finish()
+        } else {
+            appKey = key
+            loadInstalled()
+        }
     }
 
     private fun log(text: String) {
@@ -140,95 +145,38 @@ class MainActivity : AppCompatActivity() {
         scheduleFrame()
     }
 
-    private fun importAndLoad(uri: Uri) {
+    private fun loadInstalled() {
         if (busy || closed) return
         serviceEpoch++
-        editor?.dismiss()
-        editor = null
-        editorToken = 0
+        val epoch = serviceEpoch
         busy = true
         ready = false
         executed = false
         guestLive = false
         buttons()
-        frameView.submitFrame(null)
-        frameView.visibility = View.GONE
-        frame = null
-        logView.text = ""
         Native.executor.execute {
             var loaded = false
             try {
                 if (!closed) {
-                    servicesChanged = false
-                    lastTransferReport = 0L
-                    Native.release()
-                    val staging = File(cacheDir, "staging")
-                    check(staging.isDirectory || staging.mkdirs())
-                    val ipa = File(staging, "input.ipa")
-                    log("读取 $uri")
-                    val source = contentResolver.openInputStream(uri) ?: error("未能打开文件")
-                    source.use { input -> ipa.outputStream().use { output -> input.copyTo(output) } }
-                    log("已缓存 ${ipa.length()} 字节")
-                    val work = File(cacheDir, "app")
-                    check(!work.exists() || work.deleteRecursively())
-                    check(work.mkdirs())
-                    val base = work.canonicalPath + File.separator
-                    var count = 0
-                    var total = 0L
-                    ZipFile(ipa).use { zip ->
-                        val entries = zip.entries()
-                        while (entries.hasMoreElements()) {
-                            check(!closed) { "导入已停止" }
-                            val entry = entries.nextElement()
-                            val out = File(work, entry.name)
-                            check(out.canonicalPath.startsWith(base)) { "条目超出应用目录" }
-                            if (entry.isDirectory) {
-                                check(out.isDirectory || out.mkdirs())
-                                continue
-                            }
-                            check(entry.size <= MAX_ENTRY_BYTES) { "条目过大：${entry.name}" }
-                            check(out.parentFile!!.isDirectory || out.parentFile!!.mkdirs())
-                            zip.getInputStream(entry).use { input ->
-                                out.outputStream().use { output ->
-                                    val buffer = ByteArray(65536)
-                                    var written = 0L
-                                    while (true) {
-                                        val n = input.read(buffer)
-                                        if (n < 0) break
-                                        written += n
-                                        total += n
-                                        check(written <= MAX_ENTRY_BYTES && total <= MAX_TOTAL_BYTES) { "解包大小超出限制" }
-                                        output.write(buffer, 0, n)
-                                    }
-                                }
-                            }
-                            count++
-                        }
-                    }
-                    log("解出 $count 个文件")
-                    val app = File(work, "Payload").listFiles()?.firstOrNull { it.isDirectory && it.name.endsWith(".app") }
-                        ?: error("IPA 里没有 Payload/*.app")
-                    val exeName = readExecutable(File(app, "Info.plist")) ?: error("缺少 CFBundleExecutable")
-                    val exe = File(app, exeName)
-                    check(exe.isFile && exe.canonicalPath.startsWith(app.canonicalPath + File.separator)) { "可执行文件无效" }
-                    log("bundle ${app.name} exe $exeName")
-                    val plist = File(app, "Info.plist")
-                    val bundleId = readPlistString(plist, "CFBundleIdentifier") ?: error("缺少 CFBundleIdentifier")
-                    val digest = java.security.MessageDigest.getInstance("SHA-256").digest(bundleId.toByteArray(Charsets.UTF_8))
-                    val directory = digest.joinToString("") { "%02x".format(it.toInt() and 255) }
-                    val sandbox = File(File(filesDir, "applications"), directory)
-                    check(sandbox.isDirectory || sandbox.mkdirs()) { "应用数据目录创建失败" }
-                    File(sandbox.parentFile, "$directory.bundle-id").writeText(bundleId)
-                    log(Native.load(exe.absolutePath, sandbox.absolutePath))
+                    lease = library.acquire(appKey)
+                    val app = library.find(appKey) ?: error("应用未安装，请从应用库重新导入")
+                    check(app.sandbox.isDirectory || app.sandbox.mkdirs()) { "无法打开应用数据目录" }
+                    log("打开 ${app.name} ${app.version}")
+                    log(Native.load(app.executable.absolutePath, app.sandbox.absolutePath))
                     loaded = Native.ready()
-                    log(if (loaded) "已装载，可以点运行" else "装载失败，运行已禁用")
+                    if (!loaded) log("此应用尚不能运行，安装文件及数据已保留")
                 }
             } catch (e: Exception) {
-                log("导入失败：$e")
+                log("打开失败：${e.message}")
             } finally {
                 val value = loaded
                 runOnUiThread {
-                    if (!closed) { ready = value; busy = false; buttons() }
+                    if (!closed && epoch == serviceEpoch) {
+                        ready = value
+                        busy = false
+                        buttons()
+                        if (value) runLoaded()
+                    }
                 }
             }
         }
@@ -429,7 +377,7 @@ class MainActivity : AppCompatActivity() {
                 if (!closed) {
                     val rc = action()
                     log("$label，结果 $rc")
-                    check(rc >= 0) { "点击回调异常，已停止输入；重新导入可重建会话" }
+                    check(rc >= 0) { "点击回调异常，请返回应用库后重新打开" }
                     val pumped = Native.pump()
                     check(pumped >= 0) { "客机队列异常，已停止输入" }
                     drawGuestFrame(epoch)
@@ -477,34 +425,12 @@ class MainActivity : AppCompatActivity() {
         scheduleFrame()
         editor?.dismiss()
         editor = null
-        Native.executor.execute { Native.release() }
+        Native.executor.execute {
+            try { Native.release() } finally { lease?.close(); lease = null }
+        }
         frameView.submitFrame(null)
         frame = null
         super.onDestroy()
     }
 
-    private fun readExecutable(plist: File): String? = readPlistString(plist, "CFBundleExecutable")
-
-    private fun readPlistString(plist: File, key: String): String? {
-        if (!plist.isFile || plist.length() > 2 * 1024 * 1024) return null
-        val parser = android.util.Xml.newPullParser()
-        plist.reader().use { reader ->
-            parser.setInput(reader)
-            var matched = false
-            while (parser.eventType != org.xmlpull.v1.XmlPullParser.END_DOCUMENT) {
-                if (parser.eventType == org.xmlpull.v1.XmlPullParser.START_TAG) {
-                    if (parser.name == "key") matched = parser.nextText() == key
-                    else if (matched && parser.name == "string") return parser.nextText()
-                    else if (matched) matched = false
-                }
-                parser.next()
-            }
-        }
-        return null
-    }
-
-    companion object {
-        private const val MAX_ENTRY_BYTES = 256L * 1024 * 1024
-        private const val MAX_TOTAL_BYTES = 1024L * 1024 * 1024
-    }
 }
