@@ -1,4 +1,3 @@
-typedef struct { double x, y; } ui_point;
 typedef struct {
     ui_view *view;
     ui_vc *controller;
@@ -24,7 +23,8 @@ static ui_view *hit_view(ui_view *v, double x, double y, double alpha, unsigned 
     if (alpha <= 0.01 || !inside_view(v, x, y)) return NULL;
     for (int i = v->nkids; i > 0; i--) {
         ui_view *child = v->kids[i - 1];
-        ui_view *hit = hit_view(child, x - child->x, y - child->y, alpha, depth + 1);
+        ui_point shift = child_offset(v, child);
+        ui_view *hit = hit_view(child, x + shift.x - child->x, y + shift.y - child->y, alpha, depth + 1);
         if (hit) return hit;
     }
     return v;
@@ -33,13 +33,15 @@ static ui_view *hit_view(ui_view *v, double x, double y, double alpha, unsigned 
 static int view_point_inside(void *self, const char *sel, ui_point point, void *event)
 {
     (void)sel; (void)event;
-    return inside_view(as_view(self), point.x, point.y);
+    ui_view *v = as_view(self);
+    return v && inside_view(v, point.x - v->offset.x, point.y - v->offset.y);
 }
 
 static void *view_hit_test(void *self, const char *sel, ui_point point, void *event)
 {
     (void)sel; (void)event;
-    ui_view *v = hit_view(as_view(self), point.x, point.y, 1, 0);
+    ui_view *root = as_view(self);
+    ui_view *v = root ? hit_view(root, point.x - root->offset.x, point.y - root->offset.y, 1, 0) : NULL;
     return v ? v->object : NULL;
 }
 
@@ -247,20 +249,26 @@ static void *bar_title_init(void *self, const char *sel, void *title, long style
     return self;
 }
 
+static ui_view *view_at(double x, double y)
+{
+    if (!g_key_window || g_key_window->hidden || !g_key_window->interactive ||
+        !isfinite(g_key_window->alpha) || g_key_window->alpha <= 0.01 ||
+        !inside_view(g_key_window, x - g_key_window->x, y - g_key_window->y)) return NULL;
+    ui_view *root = g_modal ? as_view(g_modal->view) : g_key_window;
+    double ox, oy;
+    screen_origin(root, &ox, &oy);
+    return hit_view(root, x - ox, y - oy, 1, 0);
+}
+
 static ui_hit hit_at(double x, double y)
 {
     ui_hit result = {0};
-    if (!g_key_window || g_key_window->hidden || !g_key_window->interactive ||
-        !isfinite(g_key_window->alpha) || g_key_window->alpha <= 0.01 ||
-        !inside_view(g_key_window, x - g_key_window->x, y - g_key_window->y)) return result;
-    ui_view *root = g_modal ? as_view(g_modal->view) : g_key_window;
     double ox, oy;
-    origin(root, &ox, &oy);
-    ui_view *v = hit_view(root, x - ox, y - oy, 1, 0);
+    ui_view *v = view_at(x, y);
     result.view = v;
     if (!v) return result;
     result.kind = 1;
-    origin(v, &ox, &oy);
+    screen_origin(v, &ox, &oy);
     for (ui_vc *vc = controllers; vc; vc = vc->next) {
         if (vc->bar != v->object) continue;
         result.controller = vc;
@@ -365,36 +373,89 @@ static int pointer_body(void *context)
     return 0;
 }
 
-typedef struct { double x, y, delta; } scroll_args;
+static ui_view *pan_anchor, *pan_target;
+static ui_point pan_last;
 
-static int scroll_body(void *context)
+static void pan_reset(void)
 {
-    scroll_args *p = context;
-    if (!isfinite(p->x) || !isfinite(p->y) || !isfinite(p->delta)) return 0;
-    input_reset();
-    if (!g_key_window) return 0;
-    prepare_draw(NULL);
-    ui_hit hit = hit_at(p->x, p->y);
-    for (ui_view *v = hit.view; v; v = v->parent) {
-        ui_table *t = v->table;
-        if (!t) continue;
-        double previous = t->offset;
-        t->offset = fmin(fmax(0, t->offset + p->delta), fmax(0, t->content_height - v->h));
-        table_update(v);
-        layout_dirty = 1;
-        chm_session_log(g_sess, "input: table offset=%.2f", t->offset);
-        return fabs(previous - t->offset) > 0.001;
+    if (pan_target) pan_target->dragging = 0;
+    pan_anchor = pan_target = NULL;
+}
+
+static int pan_finish(void)
+{
+    ui_view *v = pan_target;
+    pan_reset();
+    if (!v) return 0;
+    const char *sel = "scrollViewDidEndDragging:willDecelerate:";
+    void (*did)(void *, const char *, void *, signed char) = chm_objc_find_imp(v->delegate, sel);
+    if (did) did(v->delegate, sel, v->object, 0);
+    return 1;
+}
+
+static int pan_visible(ui_view *v)
+{
+    ui_view *root = g_modal ? as_view(g_modal->view) : g_key_window;
+    for (; v; v = v->parent) {
+        if (v->hidden || !v->interactive || v->alpha <= 0.01) return 0;
+        if (v == root) return 1;
     }
     return 0;
 }
 
-int chm_ui_scroll(double x, double y, double delta)
+static int pan_body(void *context)
+{
+    pointer_args *p = context;
+    if (p->phase == 3 || !isfinite(p->x) || !isfinite(p->y)) return pan_finish();
+    if (p->phase == 0) {
+        pan_finish();
+        input_reset();
+        if (!g_key_window) return 0;
+        prepare_draw(NULL);
+        pan_anchor = view_at(p->x, p->y);
+        pan_last = (ui_point){p->x, p->y};
+        return 0;
+    }
+    if (!pan_anchor || (p->phase != 1 && p->phase != 2)) return 0;
+    if (!pan_visible(pan_target ? pan_target : pan_anchor)) return pan_finish();
+    double dx = pan_last.x - p->x, dy = pan_last.y - p->y;
+    pan_last = (ui_point){p->x, p->y};
+    if (!pan_target) {
+        for (ui_view *v = pan_anchor; v; v = v->parent) {
+            if (v->scrollable && !v->scroll_disabled) {
+                ui_point next = scroll_limit(v, (ui_point){v->offset.x + dx, v->offset.y + dy});
+                if (next.x != v->offset.x || next.y != v->offset.y) {
+                    pan_target = v;
+                    v->dragging = 1;
+                    const char *sel = "scrollViewWillBeginDragging:";
+                    void (*will)(void *, const char *, void *) = chm_objc_find_imp(v->delegate, sel);
+                    if (will) will(v->delegate, sel, v->object);
+                    break;
+                }
+            }
+            if (g_modal && v->object == g_modal->view) break;
+        }
+    }
+    ui_view *v = pan_target;
+    int changed = v && !v->scroll_disabled && scroll_to(v, (ui_point){v->offset.x + dx, v->offset.y + dy});
+    if (p->phase == 2) changed |= pan_finish();
+    return changed;
+}
+
+int chm_ui_pan(int phase, double x, double y)
 {
     if (!g_sess || g_sess->exit_code == -2) return -1;
-    scroll_args args = {x, y, delta};
-    int rc = chm_session_callback(g_sess, scroll_body, &args);
-    if (rc == -2) { input_reset(); g_sess->exit_code = -2; }
+    pointer_args args = {phase, x, y};
+    int rc = chm_session_callback(g_sess, pan_body, &args);
+    if (rc == -2) { pan_reset(); g_sess->exit_code = -2; }
     return rc;
+}
+
+int chm_ui_scroll(double x, double y, double delta)
+{
+    if (!isfinite(delta)) return 0;
+    int rc = chm_ui_pan(0, x, y);
+    return rc < 0 ? rc : chm_ui_pan(2, x, y - delta);
 }
 
 int chm_ui_pointer(int phase, double x, double y)

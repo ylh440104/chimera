@@ -16,7 +16,8 @@ internal class FrameCommand(
     private val bottom: Float,
     private val paint: Paint?,
     private val layout: StaticLayout?,
-    private val rounded: Boolean
+    private val rounded: Boolean,
+    private val symbol: android.graphics.Path? = null
 ) {
     fun replay(canvas: Canvas) {
         val saved = canvas.save()
@@ -27,7 +28,11 @@ internal class FrameCommand(
                 canvas.translate(x, y + max(0f, (height - layout.height) / 2))
                 layout.draw(canvas)
             } else if (paint != null) {
-                if (rounded) {
+                if (symbol != null) {
+                    canvas.translate(x, y)
+                    canvas.scale(width / 24f, height / 24f)
+                    canvas.drawPath(symbol, paint)
+                } else if (rounded) {
                     val radius = minOf(width, height) / 2
                     canvas.drawRoundRect(x, y, x + width, y + height, radius, radius, paint)
                 } else canvas.drawRect(x, y, x + width, y + height, paint)

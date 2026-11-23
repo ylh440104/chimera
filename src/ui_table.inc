@@ -57,12 +57,13 @@ static void *cell_part(void *self, const char *sel)
     if (!c) return NULL;
     int content = !strcmp(sel, "contentView"), detail = !strcmp(sel, "detailTextLabel");
     if (detail && !c->style) return NULL;
-    void **slot = content ? &c->content : detail ? &c->detail : &c->label;
+    int icon = !strcmp(sel, "imageView");
+    void **slot = content ? &c->content : detail ? &c->detail : icon ? &c->icon : &c->label;
     if (!*slot) {
-        *slot = chm_foundation_alloc_obj(content ? "UIView" : "UILabel", 0);
+        *slot = chm_foundation_alloc_obj(content ? "UIView" : icon ? "UIImageView" : "UILabel", 0);
         ui_view *v = as_view(*slot);
         if (!v) return NULL;
-        if (!content) {
+        if (!content && !icon) {
             v->text_color = detail ? 0xffb3b3bdu : 0xffffffffu;
             v->font_size = detail ? 15 : 17;
             v->font_align = detail && c->style != 3 ? 2 : 0;
@@ -150,16 +151,24 @@ static void cell_layout(ui_cell *c)
     ui_view *content = as_view(c->content);
     if (content) { content->x = content->y = 0; content->w = end; content->h = h; }
     ui_view *label = as_view(c->label), *detail = as_view(c->detail);
-    double span = fmax(0, end - 16);
-    if (label) { label->x = 16; label->y = 0; label->w = span; label->h = h; }
+    double start = 16;
+    ui_view *icon = as_view(c->icon);
+    if (icon) {
+        ui_point size = image_size(icon->image, NULL);
+        double side = fmax(0, fmin(end - start, fmin(h - 4, fmax(size.x, size.y))));
+        icon->x = start; icon->y = (h - side) / 2; icon->w = icon->h = side;
+        if (side > 0) start += side + 12;
+    }
+    double span = fmax(0, end - start);
+    if (label) { label->x = start; label->y = 0; label->w = span; label->h = h; }
     if (detail) {
         if (c->style == 3) {
             if (label) label->h = h * 0.55;
-            detail->x = 16; detail->y = h * 0.55; detail->w = span; detail->h = h * 0.45;
+            detail->x = start; detail->y = h * 0.55; detail->w = span; detail->h = h * 0.45;
         } else {
             double split = span * 0.55;
             if (label) label->w = fmax(0, split - 8);
-            detail->x = 16 + split; detail->y = 0; detail->w = span - split; detail->h = h;
+            detail->x = start + split; detail->y = 0; detail->w = span - split; detail->h = h;
         }
     }
 }
@@ -276,11 +285,11 @@ static void table_update(ui_view *view)
     }
     ui_table *t = view->table;
     if (!t || t->loading) return;
-    t->offset = fmin(fmax(0, t->offset), fmax(0, t->content_height - view->h));
+    view->offset = scroll_limit(view, view->offset);
     for (size_t i = 0; i < t->count; ++i) {
         ui_row *row = &t->rows[i];
         row->view->x = row->header ? 16 : 0;
-        row->view->y = row->top - t->offset;
+        row->view->y = row->top;
         row->view->w = fmax(0, view->w - (row->header ? 32 : 0));
         row->view->h = row->height;
         if (row->view->cell) cell_layout(row->view->cell);

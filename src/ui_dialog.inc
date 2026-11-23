@@ -173,7 +173,7 @@ static void dialogs_prepare(void)
         if (!root) continue;
         root->bg = 0x99000000u;
         if (!a->panel) {
-            a->panel = dialog_view("UIView", root);
+            a->panel = dialog_view("UIScrollView", root);
             if (!a->panel) return;
             a->panel->bg = 0xff2c2c2eu; a->panel->clips = 1;
             a->heading = dialog_view("UILabel", a->panel);
@@ -189,8 +189,9 @@ static void dialogs_prepare(void)
         double w = fmin(a->style ? 360 : 560, fmax(0, root->w - 32));
         const char *message = chm_foundation_cstr(a->message);
         double message_height = *message ? fmin(160, 22 * (1 + strlen(message) / 36)) : 0;
-        double h = 64 + message_height + fields * 52 + actions * 48;
-        h = fmin(h, fmax(0, root->h - 32));
+        double content_height = 64 + message_height + fields * 52 + actions * 48;
+        a->panel->content_size = (ui_point){w, content_height};
+        double h = fmin(content_height, fmax(0, root->h - 32));
         dialog_frame(a->panel, (root->w - w) / 2, a->style ? (root->h - h) / 2 : root->h - h - 16, w, h);
         l_set_text(a->heading->object, "setText:", vc->title);
         l_set_text(a->body->object, "setText:", a->message);
@@ -269,14 +270,31 @@ int chm_ui_edit_text(uint64_t token, const char *text, int commit)
 static void *activity_init(void *self, const char *sel, long style)
 {
     (void)style;
-    return v_init_frame(self, sel, n_rect(0, 0, 28, 28));
+    void *result = v_init_frame(self, sel, n_rect(0, 0, 28, 28));
+    ui_view *v = as_view(result);
+    if (v) v->hidden = 1;
+    return result;
 }
 static void activity_animate(void *self, const char *sel)
 {
     ui_view *v = as_view(self);
     if (!v) return;
     v->animating = !strcmp(sel, "startAnimating");
-    v->hidden = !v->animating;
+    v->hidden = !v->animating && !v->show_when_stopped;
+}
+static void activity_set_hides(void *self, const char *sel, signed char hides)
+{
+    (void)sel;
+    ui_view *v = as_view(self);
+    if (!v) return;
+    v->show_when_stopped = !hides;
+    if (!v->animating) v->hidden = !!hides;
+}
+static int activity_hides(void *self, const char *sel)
+{
+    (void)sel;
+    ui_view *v = as_view(self);
+    return v && !v->show_when_stopped;
 }
 static int activity_is_animating(void *self, const char *sel)
 {

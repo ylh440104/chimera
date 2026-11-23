@@ -5,7 +5,9 @@ __attribute__((objc_root_class))
 @interface NSObject { Class isa; }
 + (id)alloc;
 + (id)new;
++ (Class)class;
 - (id)init;
+- (BOOL)isKindOfClass:(Class)cls;
 @end
 @interface NSString : NSObject
 + (id)stringWithUTF8String:(const char *)bytes;
@@ -91,6 +93,30 @@ __attribute__((objc_root_class))
 @interface NSURL : NSObject
 + (id)URLWithString:(id)string;
 @end
+@interface NSURL (FileLocations)
+- (BOOL)isFileURL;
+- (NSString *)path;
+- (NSURL *)URLByAppendingPathComponent:(NSString *)component;
+- (BOOL)getResourceValue:(id *)out forKey:(id)key error:(id *)error;
+@end
+@interface NSFileManager (DirectoryURLs)
+- (NSURL *)URLForDirectory:(NSUInteger)dir inDomain:(NSUInteger)domain appropriateForURL:(NSURL *)other create:(BOOL)create error:(id *)error;
+- (NSArray *)URLsForDirectory:(NSUInteger)dir inDomains:(NSUInteger)domains;
+- (NSDictionary *)attributesOfItemAtPath:(NSString *)path error:(id *)error;
+@end
+@interface NSData (FileURLs)
++ (NSData *)dataWithContentsOfURL:(NSURL *)url;
+- (BOOL)writeToURL:(NSURL *)url atomically:(BOOL)atomic;
+- (NSUInteger)length;
+- (const void *)bytes;
+@end
+@interface NSDate : NSObject
+- (double)timeIntervalSince1970;
+- (double)timeIntervalSinceReferenceDate;
+@end
+extern id NSFileSize, NSFileModificationDate, NSFilePosixPermissions, NSURLFileSizeKey;
+extern NSArray *NSSearchPathForDirectoriesInDomains(NSUInteger, NSUInteger, BOOL);
+extern int memcmp(const void *, const void *, NSUInteger);
 @interface NSURLSessionTask : NSObject
 - (void)resume;
 - (void)cancel;
@@ -189,6 +215,36 @@ __attribute__((noinline)) static void setup_callbacks(int capture)
     [stop resume]; [stop cancel];
 }
 
+static int check_file_locations(NSFileManager *fm)
+{
+    id error = (id)0;
+    NSURL *docs = [fm URLForDirectory:9 inDomain:1 appropriateForURL:(id)0 create:1 error:&error];
+    NSArray *urls = [fm URLsForDirectory:9 inDomains:1];
+    NSString *path = [NSSearchPathForDirectoriesInDomains(9, 1, 1) firstObject];
+    if (error || ![docs isFileURL] || !path || [urls count] != 1 || ![[urls firstObject] isFileURL]) return 240;
+    if (strcmp([[docs path] UTF8String], [path UTF8String]) ||
+        strcmp([[[urls firstObject] path] UTF8String], [path UTF8String])) return 241;
+    if (![fm createDirectoryAtPath:path withIntermediateDirectories:1 attributes:(id)0 error:&error] || error) return 242;
+    if (![fm changeCurrentDirectoryPath:path]) return 243;
+    NSURL *file = [docs URLByAppendingPathComponent:@"location test.txt"];
+    NSData *expected = [@"round trip" dataUsingEncoding:4];
+    if ([expected length] != 10 || ![expected writeToURL:file atomically:1]) return 244;
+    NSData *relative = [NSData dataWithContentsOfFile:@"location test.txt"];
+    NSData *absolute = [NSData dataWithContentsOfURL:file];
+    if ([relative length] != 10 || [absolute length] != 10 || memcmp([relative bytes], [expected bytes], 10) ||
+        memcmp([absolute bytes], [expected bytes], 10)) return 245;
+    NSDictionary *attrs = [fm attributesOfItemAtPath:@"/private/var/mobile/Documents/location test.txt" error:&error];
+    if (error || ![attrs[NSFileSize] isKindOfClass:[NSNumber class]] || [attrs[NSFileSize] integerValue] != 10 ||
+        ![attrs[NSFilePosixPermissions] isKindOfClass:[NSNumber class]] || !([attrs[NSFilePosixPermissions] integerValue] & 0400)) return 246;
+    NSDate *modified = attrs[NSFileModificationDate];
+    if (![modified isKindOfClass:[NSDate class]] || [modified timeIntervalSince1970] <= 0 ||
+        [modified timeIntervalSince1970] - [modified timeIntervalSinceReferenceDate] != 978307200.0) return 247;
+    id size = (id)0;
+    if (![file getResourceValue:&size forKey:NSURLFileSizeKey error:&error] || error || [size integerValue] != 10) return 248;
+    if ([fm URLForDirectory:9 inDomain:2 appropriateForURL:(id)0 create:1 error:&error] || !error) return 249;
+    return 0;
+}
+
 int main(void)
 {
     id error = (id)0;
@@ -200,6 +256,8 @@ int main(void)
     if (!localized || strcmp([[localized localizedStringForKey:@"fixture.key" value:@"fallback" table:(id)0] UTF8String], "Resource value")) return 238;
     if ([NSBundle bundleWithIdentifier:@"dev.chimera.services-fixture"] != bundle) return 239;
     NSFileManager *fm = [NSFileManager defaultManager];
+    int file_check = check_file_locations(fm);
+    if (file_check) return file_check;
     if (![fm createDirectoryAtPath:@"/var/mobile/Documents/services" withIntermediateDirectories:1 attributes:(id)0 error:&error] || error) return 210;
     if (![fm changeCurrentDirectoryPath:@"/var/mobile/Documents/services"]) return 211;
     NSDictionary *dict = @{@"value":@7, @"enabled":[NSNumber numberWithBool:1], @"unicode":@"中文 😀", @"array":@[@"z",@"a"]};

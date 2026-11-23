@@ -22,6 +22,22 @@ static void emit_text(chm_draw_fn draw, void *context, const chm_draw_command *b
     if (c.clip_left < c.clip_right && c.clip_top < c.clip_bottom) draw(context, &c);
 }
 
+static int paint_symbol(chm_draw_fn draw, void *context, void *object, chm_draw_command box, uint32_t tint)
+{
+    ui_symbol_image *img = symbol_image(object);
+    if (!img || !img->symbol || box.width <= 0 || box.height <= 0) return 0;
+    double side = fmin(box.width, box.height);
+    box.x += (box.width - side) / 2;
+    box.y += (box.height - side) / 2;
+    box.width = box.height = side;
+    box.kind = 3;
+    box.text = img->symbol->path;
+    box.color = tint;
+    if (box.x < box.clip_right && box.y < box.clip_bottom && box.x + side > box.clip_left && box.y + side > box.clip_top)
+        draw(context, &box);
+    return 1;
+}
+
 static void paint_bar(chm_draw_fn draw, void *context, ui_view *bar, const chm_draw_command *box, double alpha)
 {
     for (ui_vc *vc = controllers; vc; vc = vc->next) {
@@ -35,6 +51,15 @@ static void paint_bar(chm_draw_fn draw, void *context, ui_view *bar, const chm_d
                 chm_draw_command label = *box;
                 label.x += i * width;
                 label.width = width;
+                void *image = item ? item->image : NULL;
+                if (item && i == vc->selected && item->selected_image) image = item->selected_image;
+                chm_draw_command icon = label;
+                icon.height = fmin(26, label.height);
+                uint32_t tint = paint_color(i == vc->selected ? 0xff007affu : 0xffb3b3bdu, alpha);
+                if (image && paint_symbol(draw, context, image, icon, tint)) {
+                    label.y += icon.height;
+                    label.height -= icon.height;
+                }
                 emit_text(draw, context, &label, chm_foundation_cstr(title), 13, 1, 1,
                           paint_color(i == vc->selected ? 0xff007affu : 0xffb3b3bdu, alpha));
             }
@@ -69,6 +94,7 @@ static void paint_view(chm_draw_fn draw, void *context, ui_view *v, double px, d
     if (alpha <= 0 || left >= right || top >= bottom) return;
     chm_draw_command c = {0};
     c.x = px + v->x; c.y = py + v->y; c.width = v->w; c.height = v->h;
+    if (v->clips && (c.x >= right || c.y >= bottom || c.x + v->w <= left || c.y + v->h <= top)) return;
     c.clip_left = left; c.clip_top = top; c.clip_right = right; c.clip_bottom = bottom;
     c.color = paint_color(v->cell && v->cell->selected ? 0xff48484au : v->bg, alpha);
     if (v->w > 0 && v->h > 0 && (c.color >> 24)) draw(context, &c);
@@ -105,6 +131,7 @@ static void paint_view(chm_draw_fn draw, void *context, ui_view *v, double px, d
         if (c.width > 0) draw(context, &c);
         c.width = v->w;
     }
+    if (v->image) paint_symbol(draw, context, v->image, c, paint_color(0xff0a84ffu, alpha));
     const char *text = v->text;
     char masked[256];
     uint32_t text_color = v->text_color;
@@ -117,15 +144,18 @@ static void paint_view(chm_draw_fn draw, void *context, ui_view *v, double px, d
             masked[n] = 0; text = masked;
         }
     }
-    if (chm_objc_is_kind(v->object, "UIActivityIndicatorView") && v->animating) text = "◌";
+    if (chm_objc_is_kind(v->object, "UIActivityIndicatorView") && (v->animating || v->show_when_stopped)) text = "◌";
     emit_text(draw, context, &c, text, v->font_size, v->font_align, v->number_of_lines, paint_color(text_color, alpha));
     paint_bar(draw, context, v, &c, alpha);
     if (v->clips) {
         left = fmax(left, c.x); top = fmax(top, c.y);
         right = fmin(right, c.x + v->w); bottom = fmin(bottom, c.y + v->h);
     }
-    for (int i = 0; i < v->nkids; i++)
-        paint_view(draw, context, v->kids[i], c.x, c.y, left, top, right, bottom, alpha, depth + 1);
+    for (int i = 0; i < v->nkids; i++) {
+        ui_view *child = v->kids[i];
+        ui_point shift = child_offset(v, child);
+        paint_view(draw, context, child, c.x - shift.x, c.y - shift.y, left, top, right, bottom, alpha, depth + 1);
+    }
 }
 
 static int prepare_draw(void *context)

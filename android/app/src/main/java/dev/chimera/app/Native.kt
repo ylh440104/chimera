@@ -32,7 +32,7 @@ class Native {
         external fun tap(downX: Double, downY: Double, upX: Double, upY: Double): Int
 
         @JvmStatic
-        external fun scroll(x: Double, y: Double, delta: Double): Int
+        external fun pan(phase: Int, x: Double, y: Double): Int
 
         @JvmStatic
         external fun focusedField(): Long

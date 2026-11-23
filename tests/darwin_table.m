@@ -38,7 +38,15 @@ __attribute__((objc_root_class))
 - (void)setEnabled:(BOOL)enabled;
 - (void)addTarget:(id)target action:(SEL)sel forControlEvents:(NSUInteger)events;
 @end
+@interface UIImage : NSObject
++ (UIImage *)systemImageNamed:(NSString *)name;
+@end
+@interface UIImageView : UIView
+- (void)setImage:(UIImage *)image;
+- (UIImage *)image;
+@end
 @interface UITableViewCell : UIView
+- (UIImageView *)imageView;
 - (id)initWithStyle:(long)style reuseIdentifier:(NSString *)reuse;
 - (UILabel *)textLabel;
 - (UILabel *)detailTextLabel;
@@ -86,6 +94,9 @@ static int empty;
     else { allocated++; c = [[UITableViewCell alloc] initWithStyle:1 reuseIdentifier:@"row"]; }
     [[c textLabel] setText:[NSString stringWithFormat:@"Row %ld-%ld", [p section], [p row]]];
     [[c detailTextLabel] setText:@"Detail"];
+    UIImage *icon = [p section] == 1 && [p row] == 1 ? [UIImage systemImageNamed:@"cube.box"] : (id)0;
+    [[c imageView] setImage:icon];
+    if ([[c imageView] image] != icon || ([p section] == 1 && [p row] == 1 && !icon)) bad = 3;
     [c setAccessoryView:(id)0];
     [c setAccessoryType:1];
     if (![p section] && ![p row]) {

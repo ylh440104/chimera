@@ -1,6 +1,7 @@
 #include "chm_session.h"
 #include "chm_scene.h"
 
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -76,13 +77,6 @@ static const char *class_name(chm_objc_class *c)
     return ro ? ro->name : NULL;
 }
 
-static chm_method_list *class_methods(chm_objc_class *c)
-{
-    chm_class_ro *ro = ro_of(c);
-
-    return ro ? (chm_method_list *)(uintptr_t)ro->methods : NULL;
-}
-
 static size_t class_size(chm_objc_class *c)
 {
     chm_class_ro *ro = ro_of(c);
@@ -90,39 +84,7 @@ static size_t class_size(chm_objc_class *c)
     return ro ? (size_t)ro->instance_size : 0;
 }
 
-static void *method_imp_in_list(chm_method_list *ml, const char *sel)
-{
-    uint32_t header;
-    uint32_t entsize;
-    uint32_t i;
-    uint8_t *base;
-
-    if (!ml || !sel)
-        return NULL;
-    header = ml->entsize_and_flags;
-    base = (uint8_t *)ml + sizeof(chm_method_list);
-    if (header & CHM_METHOD_LIST_SMALL) {
-        chm_small_method *m = (chm_small_method *)base;
-
-        for (i = 0; i < ml->count; i++) {
-            const char *name = (const char *)&m[i] + m[i].name_offset;
-
-            if (strcmp(name, sel) == 0)
-                return (void *)((uint8_t *)&m[i] + m[i].imp_offset);
-        }
-        return NULL;
-    }
-    entsize = header & ~0x3u;
-    if (entsize < sizeof(chm_classic_method))
-        entsize = sizeof(chm_classic_method);
-    for (i = 0; i < ml->count; i++) {
-        chm_classic_method *e = (chm_classic_method *)(base + (size_t)i * entsize);
-
-        if (e->name && strcmp(e->name, sel) == 0)
-            return e->imp;
-    }
-    return NULL;
-}
+#include "objc_methods.inc"
 
 #define CHM_TRACE_RING 48
 
@@ -209,7 +171,8 @@ static void *resolve_imp(void *self, const char *sel, int report)
         return NULL;
     }
     while (c && depth < 64) {
-        void *imp = method_imp_in_list(class_methods(c), sel);
+        objc_method *method = method_local(c, sel);
+        void *imp = method ? method->imp : NULL;
 
         if (imp) {
             trace_msg(origin, sel, imp);
@@ -233,7 +196,7 @@ static void *resolve_imp(void *self, const char *sel, int report)
         fallback = chm_foundation_lookup_method(NULL, sel);
     trace_msg(origin, sel, fallback);
     if (!fallback && report && g_active_session)
-        chm_session_log(g_active_session, "selector miss: -[%s %s]", origin, sel);
+        chm_session_log(g_active_session, "selector miss: %c[%s %s]", class_receiver(self) ? '+' : '-', origin, sel);
     return fallback;
 }
 
@@ -270,7 +233,8 @@ void *chm_objc_resolve_super2_imp(void *super_ptr, const char *sel)
     if (c)
         c = (chm_objc_class *)c->superclass;
     while (c && depth < 64) {
-        void *imp = method_imp_in_list(class_methods(c), sel);
+        objc_method *method = method_local(c, sel);
+        void *imp = method ? method->imp : NULL;
 
         if (imp)
             return imp;
@@ -284,6 +248,8 @@ void *chm_objc_resolve_super2_imp(void *super_ptr, const char *sel)
 void chm_objc_session_init(chm_session *s)
 {
     g_active_session = s;
+    s->objc_methods = calloc(1, sizeof(*s->objc_methods));
+    g_trace_pos = g_trace_total = 0;
     s->class_count = 0;
     s->sel_count = 0;
 }
@@ -600,6 +566,16 @@ void *chm_objc_session_lookup(chm_session *s, const char *name)
         const char *name;
         void *addr;
     } table[] = {
+        { "_class_addMethod", add_method },
+        { "_class_getInstanceMethod", instance_method },
+        { "_class_getClassMethod", meta_method },
+        { "_class_copyMethodList", copy_methods },
+        { "_method_getImplementation", method_implementation },
+        { "_method_getName", method_name },
+        { "_method_getTypeEncoding", method_types },
+        { "_method_exchangeImplementations", exchange_methods },
+        { "_objc_getAssociatedObject", associated_get },
+        { "_objc_setAssociatedObject", associated_set },
         { "_objc_msgSend", (void *)chm_objc_msgSend_trampoline },
         { "_objc_msgSendSuper2", (void *)chm_objc_msgSendSuper2_trampoline },
         { "_objc_getClass", (void *)get_class_impl },

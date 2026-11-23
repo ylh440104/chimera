@@ -7,12 +7,11 @@ import android.util.Log
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
-import kotlin.math.hypot
 import kotlin.math.min
 
 class GuestImageView(context: Context) : View(context) {
     var onGuestTap: ((PointF, PointF) -> Unit)? = null
-    var onGuestScroll: ((PointF, Float) -> Unit)? = null
+    internal var onGuestPan: ((PanPhase, Float, Float) -> Unit)? = null
     var onBackend: ((Boolean) -> Unit)? = null
     var acceptInput = false
         set(value) {
@@ -22,11 +21,14 @@ class GuestImageView(context: Context) : View(context) {
     private var frame: GuestFrame? = null
     val hasFrame: Boolean get() = frame != null
     private var backend: Boolean? = null
-    private var start: PointF? = null
-    private var startX = 0f
-    private var startY = 0f
     private var pointer = -1
-    private var dragged = false
+    private val gesture = GuestGesture(
+        { phase, x, y -> onGuestPan?.invoke(phase, x, y) },
+        { x, y, upX, upY ->
+            performClick()
+            onGuestTap?.invoke(PointF(x, y), PointF(upX, upY))
+        }
+    )
     private val slop = ViewConfiguration.get(context).scaledTouchSlop
 
     init {
@@ -35,7 +37,7 @@ class GuestImageView(context: Context) : View(context) {
     }
 
     fun submitFrame(value: GuestFrame?) {
-        cancelGesture()
+        if (value == null || frame?.width != value.width || frame?.height != value.height) cancelGesture()
         frame = value
         invalidate()
     }
@@ -82,9 +84,8 @@ class GuestImageView(context: Context) : View(context) {
     }
 
     private fun cancelGesture() {
-        start = null
+        gesture.cancel()
         pointer = -1
-        dragged = false
         parent?.requestDisallowInterceptTouchEvent(false)
     }
 
@@ -93,33 +94,25 @@ class GuestImageView(context: Context) : View(context) {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 cancelGesture()
-                start = guestPoint(event.x, event.y) ?: return false
-                startX = event.x
-                startY = event.y
+                val point = guestPoint(event.x, event.y) ?: return false
+                val scale = viewport()?.get(2) ?: return false
                 pointer = event.getPointerId(0)
+                gesture.begin(point.x, point.y, slop / scale)
                 parent?.requestDisallowInterceptTouchEvent(true)
-                return true
             }
-            MotionEvent.ACTION_MOVE -> {
-                val index = event.findPointerIndex(pointer)
-                if (index < 0) cancelGesture()
-                else if (hypot(event.getX(index) - startX, event.getY(index) - startY) > slop) dragged = true
-            }
-            MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_CANCEL -> cancelGesture()
-            MotionEvent.ACTION_UP -> {
-                val from = start
-                val index = event.findPointerIndex(pointer)
-                val scroll = dragged || (index >= 0 && hypot(event.getX(index) - startX, event.getY(index) - startY) > slop)
-                val to = if (index >= 0) guestPoint(event.getX(index), event.getY(index), !scroll) else null
-                cancelGesture()
-                if (from != null && to != null) {
-                    if (scroll) onGuestScroll?.invoke(from, from.y - to.y)
-                    else {
-                        performClick()
-                        onGuestTap?.invoke(from, to)
-                    }
+            MotionEvent.ACTION_MOVE, MotionEvent.ACTION_UP -> {
+                val i = event.findPointerIndex(pointer)
+                val point = if (i >= 0) guestPoint(event.getX(i), event.getY(i), false) else null
+                val f = frame
+                if (point == null || f == null) cancelGesture()
+                else {
+                    val up = event.actionMasked == MotionEvent.ACTION_UP
+                    val inside = point.x >= 0 && point.y >= 0 && point.x < f.width && point.y < f.height
+                    gesture.sample(point.x, point.y, up, inside)
+                    if (up) cancelGesture()
                 }
             }
+            MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_CANCEL -> cancelGesture()
         }
         return true
     }

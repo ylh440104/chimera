@@ -20,7 +20,6 @@ static uint64_t g_iomaster_port;
 static uint64_t g_dispatch_main_q_alias;
 static uint64_t g_ehtype_nsexception;
 static uint64_t g_ksec[10];
-static uint64_t g_nskey[11];
 static uint64_t g_gcnote[4];
 static uint64_t g_avcat[2];
 static uint64_t g_edge_zero[4];
@@ -236,81 +235,11 @@ static void objc_note(const char *what)
     (void)what;
 }
 
-static void *class_addMethod_impl(void *cls, const char *sel, void *imp, const char *types)
-{
-    objc_note("class_addMethod");
-    (void)cls;
-    (void)sel;
-    (void)imp;
-    (void)types;
-    return NULL;
-}
-
-static void *class_getInstanceMethod_impl(void *cls, const char *sel)
-{
-    (void)cls;
-    (void)sel;
-    return NULL;
-}
-
-static void *class_getClassMethod_impl(void *cls, const char *sel)
-{
-    (void)cls;
-    (void)sel;
-    return NULL;
-}
-
-static void *class_copyMethodList_impl(void *cls, unsigned int *count)
-{
-    (void)cls;
-    if (count)
-        *count = 0;
-    return NULL;
-}
-
-static void *method_getImplementation_impl(void *m)
-{
-    return m;
-}
-
-static void *method_getName_impl(void *m)
-{
-    return m;
-}
-
-static const char *method_getTypeEncoding_impl(void *m)
-{
-    (void)m;
-    return NULL;
-}
-
-static void method_exchangeImplementations_impl(void *a, void *b)
-{
-    (void)a;
-    (void)b;
-    objc_note("method_exchangeImplementations");
-}
-
 static void class_setSuperclass_impl(void *cls, void *super)
 {
     (void)cls;
     (void)super;
     objc_note("class_setSuperclass");
-}
-
-static void *objc_getAssociatedObject_impl(void *obj, const void *key)
-{
-    (void)obj;
-    (void)key;
-    return NULL;
-}
-
-static void objc_setAssociatedObject_impl(void *obj, const void *key, void *value, int policy)
-{
-    (void)obj;
-    (void)key;
-    (void)value;
-    (void)policy;
 }
 
 static void objc_setProperty_impl(void *self, const char *sel, void *value, long offset)
@@ -421,12 +350,9 @@ static void NSSetUncaughtExceptionHandler_impl(void *handler)
     (void)handler;
 }
 
-static void *NSSearchPathForDirectoriesInDomains_impl(unsigned long dir, unsigned long mask, int expand)
+static void *NSSearchPathForDirectoriesInDomains_impl(unsigned long dir, unsigned long mask, signed char expand)
 {
-    (void)dir;
-    (void)mask;
-    (void)expand;
-    return NULL;
+    return chm_foundation_search_paths(dir, mask, expand);
 }
 
 static void *NSUserName_impl(void)
@@ -441,7 +367,7 @@ static void *NSHomeDirectory_impl(void)
 
 static void *NSTemporaryDirectory_impl(void)
 {
-    return string_const("/tmp");
+    return string_const("/var/mobile/tmp/");
 }
 
 static void *NSStringFromClass_impl(void *cls)
@@ -554,17 +480,7 @@ static const fw_entry g_fw[] = {
     { "_IORegistryEntryFromPath", (void *)IORegistryEntryFromPath_impl },
     { "_CC_SHA1", (void *)CC_SHA1_impl },
     { "_CACurrentMediaTime", (void *)CACurrentMediaTime_impl },
-    { "_class_addMethod", (void *)class_addMethod_impl },
-    { "_class_getInstanceMethod", (void *)class_getInstanceMethod_impl },
-    { "_class_getClassMethod", (void *)class_getClassMethod_impl },
-    { "_class_copyMethodList", (void *)class_copyMethodList_impl },
     { "_class_setSuperclass", (void *)class_setSuperclass_impl },
-    { "_method_getImplementation", (void *)method_getImplementation_impl },
-    { "_method_getName", (void *)method_getName_impl },
-    { "_method_getTypeEncoding", (void *)method_getTypeEncoding_impl },
-    { "_method_exchangeImplementations", (void *)method_exchangeImplementations_impl },
-    { "_objc_getAssociatedObject", (void *)objc_getAssociatedObject_impl },
-    { "_objc_setAssociatedObject", (void *)objc_setAssociatedObject_impl },
     { "_objc_setProperty_atomic", (void *)objc_setProperty_impl },
     { "_objc_setProperty_nonatomic", (void *)objc_setProperty_impl },
     { "_objc_setProperty_nonatomic_copy", (void *)objc_setProperty_copy_impl },
@@ -626,16 +542,6 @@ static const fw_entry g_data[] = {
     { "_kSecAttrAccessibleWhenUnlockedThisDeviceOnly", &g_ksec[8] },
     { "_kSecAttrAccessible", &g_ksec[9] },
     { "_UIEdgeInsetsZero", &g_edge_zero[0] },
-    { "_NSURLFileAllocatedSizeKey", &g_nskey[0] },
-    { "_NSURLTotalFileAllocatedSizeKey", &g_nskey[1] },
-    { "_NSURLIsRegularFileKey", &g_nskey[2] },
-    { "_NSFontAttributeName", &g_nskey[3] },
-    { "_NSParagraphStyleAttributeName", &g_nskey[4] },
-    { "_NSRunLoopCommonModes", &g_nskey[5] },
-    { "_NSProgressKindFile", &g_nskey[6] },
-    { "_NSProgressFileOperationKindDownloading", &g_nskey[7] },
-    { "_UIFontTextStyleBody", &g_nskey[8] },
-    { "_UIFontTextStyleFootnote", &g_nskey[9] },
     { "_UIWindowSceneSessionRoleApplication", &chm_scene_application_role },
     { "_GCControllerDidConnectNotification", &g_gcnote[0] },
     { "_GCControllerDidDisconnectNotification", &g_gcnote[1] },
@@ -656,17 +562,9 @@ void *chm_frameworks_lookup(const char *name)
         if (strcmp(g_fw[i].name, name) == 0)
             return g_fw[i].addr;
     }
-    for (i = 0; g_data[i].name; i++) {
-        if (strcmp(g_data[i].name, name) == 0)
-            {
-                if (!strcmp(name, "_UIFontTextStyleBody"))
-                    g_nskey[8] = (uint64_t)(uintptr_t)chm_foundation_string("UICTFontTextStyleBody");
-                if (!strcmp(name, "_UIFontTextStyleFootnote"))
-                    g_nskey[9] = (uint64_t)(uintptr_t)chm_foundation_string("UICTFontTextStyleFootnote");
-                return g_data[i].addr;
-            }
-    }
-    return NULL;
+    for (i = 0; g_data[i].name; i++)
+        if (!strcmp(g_data[i].name, name)) return g_data[i].addr;
+    return chm_foundation_constant(name);
 }
 
 int chm_frameworks_count(void)

@@ -72,12 +72,17 @@ int chm_foundation_map_path(const char *in, char *out, size_t cap)
 
 static int directory_one(const char *path)
 {
-    if (!mkdir(path, 0700)) return 0;
-    if (errno == EEXIST) {
-        struct stat st;
-        if (!stat(path, &st) && S_ISDIR(st.st_mode)) return 0;
+    struct stat st;
+    if (stat(path, &st) == 0) {
+        if (S_ISDIR(st.st_mode)) return 0;
         errno = ENOTDIR;
+        return -1;
     }
+    if (errno != ENOENT) return -1;
+    if (mkdir(path, 0700) == 0) return 0;
+    if (errno != EEXIST || stat(path, &st)) return -1;
+    if (S_ISDIR(st.st_mode)) return 0;
+    errno = ENOTDIR;
     return -1;
 }
 
@@ -85,8 +90,11 @@ static int mkdir_p(const char *path)
 {
     char tmp[2048]; size_t n = strlen(path);
     if (!n || n >= sizeof(tmp)) { errno = ENAMETOOLONG; return -1; }
+    if (!path_below(path, g_sandbox_root)) { errno = EACCES; return -1; }
+    if (directory_one(g_sandbox_root)) return -1;
+    if (!strcmp(path, g_sandbox_root)) return 0;
     memcpy(tmp, path, n + 1);
-    for (size_t i = 1; i < n; i++) {
+    for (size_t i = strlen(g_sandbox_root) + 1; i < n; i++) {
         if (tmp[i] != '/') continue;
         tmp[i] = 0; int rc = directory_one(tmp); tmp[i] = '/';
         if (rc) return -1;
@@ -94,10 +102,32 @@ static int mkdir_p(const char *path)
     return directory_one(tmp);
 }
 
-int chm_foundation_map_path_write(const char *in, char *out, size_t cap)
+int chm_foundation_map_mutable(const char *in, char *out, size_t cap)
 {
     if (!chm_foundation_map_path(in, out, cap)) return 0;
-    if (path_below(out, g_bundle_root) && !path_below(out, g_sandbox_root)) { errno = EACCES; return 0; }
+    if (!path_below(out, g_sandbox_root) ||
+        (path_below(g_bundle_root, g_sandbox_root) && path_below(out, g_bundle_root))) {
+        errno = EACCES;
+        return 0;
+    }
+    return 1;
+}
+
+int chm_foundation_prepare_home(void)
+{
+    const char *dirs[] = {"/var/mobile/Documents", "/var/mobile/Library/Caches", "/var/mobile/tmp"};
+    if (directory_one(g_sandbox_root)) return 0;
+    for (size_t i = 0; i < sizeof(dirs) / sizeof(*dirs); ++i) {
+        char path[1024];
+        if (!chm_foundation_map_mutable(dirs[i], path, sizeof(path)) || mkdir_p(path)) return 0;
+    }
+    return 1;
+}
+
+int chm_foundation_map_path_write(const char *in, char *out, size_t cap)
+{
+    if (!chm_foundation_map_mutable(in, out, cap)) return 0;
+    if (!strcmp(out, g_sandbox_root)) return 1;
     char parent[2048];
     if (strlen(out) >= sizeof(parent)) { errno = ENAMETOOLONG; return 0; }
     strcpy(parent, out);

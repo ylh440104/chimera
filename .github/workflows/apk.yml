@@ -59,7 +59,7 @@ jobs:
         run: |
           test -n "$CHIMERA_KEYSTORE_PASSWORD"
           cd android
-          gradle assembleDebug --no-daemon
+          gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon
 
       - name: verify fixed certificate
         env:

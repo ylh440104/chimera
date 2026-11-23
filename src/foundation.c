@@ -492,7 +492,7 @@ static void *fo_handle_new(int fd, const char *path)
         return NULL;
     h->magic = FO_HANDLE_MAGIC;
     h->fd = fd;
-    if (chm_io_remap(fd, fd, 0)) { free(h); close(fd); return NULL; }
+    if (chm_io_remap(fd, fd, 0) < 0) { free(h); close(fd); return NULL; }
     h->closed = 0;
     if (path)
         snprintf(h->path, sizeof(h->path), "%s", path);
@@ -1565,19 +1565,16 @@ static int f_create_dir(void *self, const char *sel, void *path, int intermediat
 
     (void)self;
     (void)sel;
-    (void)intermediate;
     (void)attrs;
-    if (error)
-        *error = NULL;
-    if (!chm_foundation_map_path(fo_bytes(path), mapped, sizeof(mapped)))
-        return 0;
-    rc = intermediate ? mkdir_p(mapped) : directory_one(mapped);
-    if (g_session)
-        chm_session_log(g_session, "mkdir [%s] rc=%d", mapped, rc);
-    if (rc == 0)
-        return 1;
-    if (error)
-        *error = make_error("NSCocoaErrorDomain", 516, "create directory failed");
+    if (error) *error = NULL;
+    if (chm_foundation_map_mutable(fo_bytes(path), mapped, sizeof(mapped))) {
+        rc = intermediate ? mkdir_p(mapped) : directory_one(mapped);
+        if (!rc) return 1;
+    }
+    int reason = errno;
+    chm_session_log(g_session, "mkdir [%s] failed: errno=%d (%s)", fo_bytes(path), reason, strerror(reason));
+    long code = reason == ENOENT ? 4 : reason == ENOTDIR || reason == EEXIST ? 516 : reason == EACCES ? 513 : 512;
+    if (error) *error = make_error("NSCocoaErrorDomain", code, strerror(reason));
     return 0;
 }
 
@@ -1763,6 +1760,27 @@ static void *f_contents_at_path(void *self, const char *sel, void *path)
     return read_whole_file(mapped);
 }
 
+typedef struct { void *isa; double epoch; } fo_date;
+
+static void *date_unix(void *cls, const char *sel, double seconds)
+{
+    (void)cls; (void)sel;
+    fo_date *date = fo_alloc("NSDate", sizeof(*date));
+    if (date) date->epoch = seconds;
+    return date;
+}
+
+static double date_interval(void *self, const char *sel)
+{
+    double epoch = ((fo_date *)self)->epoch;
+    return !strcmp(sel, "timeIntervalSince1970") ? epoch : epoch - 978307200.0;
+}
+
+static void *file_date(const struct stat *st)
+{
+    return date_unix(NULL, NULL, (double)st->st_mtim.tv_sec + (double)st->st_mtim.tv_nsec / 1e9);
+}
+
 static void *f_attrs_at_path(void *self, const char *sel, void *path, void **error)
 {
     char mapped[1024];
@@ -1786,25 +1804,67 @@ static void *f_attrs_at_path(void *self, const char *sel, void *path, void **err
     d = (fo_dict *)fo_dict_new();
     if (!d)
         return NULL;
-    d->keys[d->count] = fo_string_new("NSFileSize");
-    d->values[d->count] = fo_string_new("");
-    ((fo_string *)d->values[d->count])->length = (int64_t)st.st_size;
-    d->count++;
-    d->keys[d->count] = fo_string_new("NSFileType");
-    d->values[d->count] = fo_string_new(S_ISDIR(st.st_mode) ? "NSFileTypeDirectory"
-                                                           : "NSFileTypeRegular");
-    d->count++;
+    const char *type = S_ISDIR(st.st_mode) ? "NSFileTypeDirectory" :
+                       S_ISREG(st.st_mode) ? "NSFileTypeRegular" : "NSFileTypeUnknown";
+    if (!d_put(d, fo_string_new("NSFileType"), fo_string_new(type)) ||
+        !d_put(d, fo_string_new("NSFileSize"), n_unsigned(NULL, NULL, st.st_size)) ||
+        !d_put(d, fo_string_new("NSFilePosixPermissions"), n_unsigned(NULL, NULL, st.st_mode & 07777)) ||
+        !d_put(d, fo_string_new("NSFileModificationDate"), file_date(&st))) return NULL;
     return d;
 }
 
-static void *f_urls(void)
+static const char *directory_suffix(unsigned long dir, unsigned long domains)
 {
-    fo_array *a = (fo_array *)fo_array_new();
+    if (!(domains & 1)) return NULL;
+    switch (dir) {
+    case 5: return "Library";
+    case 9: return "Documents";
+    case 13: return "Library/Caches";
+    case 14: return "Library/Application Support";
+    case 15: return "Downloads";
+    default: return NULL;
+    }
+}
 
-    if (!a)
+static void *directory_path(unsigned long dir, unsigned long domains, int expand)
+{
+    const char *suffix = directory_suffix(dir, domains);
+    if (!suffix) return NULL;
+    char path[128];
+    snprintf(path, sizeof(path), "%s/%s", expand ? "/var/mobile" : "~", suffix);
+    return fo_string_new(path);
+}
+
+void *chm_foundation_search_paths(unsigned long dir, unsigned long domains, signed char expand)
+{
+    fo_array *paths = fo_array_new();
+    void *path = directory_path(dir, domains, expand);
+    if (path && (!paths || !a_push(paths, path))) return NULL;
+    return paths;
+}
+
+static void *url_new(void *cls, const char *sel, void *string);
+
+static void *f_directory_url(void *self, const char *sel, unsigned long dir, unsigned long domains,
+                             void *appropriate, signed char create, void **error)
+{
+    (void)sel; (void)appropriate;
+    if (error) *error = NULL;
+    void *path = directory_path(dir, domains, 1);
+    if (!path) {
+        if (error) *error = make_error("NSCocoaErrorDomain", 4, "Unsupported directory or domain");
         return NULL;
-    a->items[a->count++] = fo_string_new("/var/mobile/Containers/Data/Application/App/Documents");
-    return a;
+    }
+    if (create && !f_create_dir(self, NULL, path, 1, NULL, error)) return NULL;
+    return url_new(NULL, "fileURLWithPath:", path);
+}
+
+static void *f_urls(void *self, const char *sel, unsigned long dir, unsigned long domains)
+{
+    fo_array *urls = fo_array_new();
+    void *url = f_directory_url(self, sel, dir, domains, NULL, 0, NULL);
+    if (url && (!urls || !a_push(urls, url))) return NULL;
+    return urls;
 }
 
 static void *directory_contents(void *self, const char *sel, void *path, void **error);
@@ -2127,7 +2187,9 @@ static void *bundle_id(void *self, const char *sel)
     return d_value(bundle_metadata(self), NULL, fo_string_new("CFBundleIdentifier"));
 }
 
+#include "foundation_constants.inc"
 #include "foundation_services.inc"
+#include "foundation_file_values.inc"
 
 static const struct {
     const char *sel;
@@ -2268,7 +2330,7 @@ static const struct {
     { "writeToFile:atomically:encoding:error:", (void *)str_write_to_file },
     { "initWithFormat:arguments:", (void *)chm_ns_format_list },
     { "URLsForDirectory:inDomains:", (void *)f_urls },
-    { "URLForDirectory:inDomain:appropriateForURL:create:error:", (void *)f_urls },
+    { "URLForDirectory:inDomain:appropriateForURL:create:error:", (void *)f_directory_url },
     { "contentsOfDirectoryAtPath:error:", (void *)directory_contents },
     { "processInfo", NULL },
     { "defaultManager", NULL },
@@ -2321,6 +2383,7 @@ void chm_foundation_init(chm_session *s)
         if (c)
             g_classes[g_class_count++] = c;
     }
+    chm_objc_register_host(s, file_value_methods, sizeof(file_value_methods) / sizeof(*file_value_methods));
     for (k = 0; g_methods[k].sel; k++) {
         chm_method_reg m;
 
@@ -2340,6 +2403,7 @@ void chm_foundation_shutdown(void)
 {
     int i;
     services_shutdown();
+    constants_reset();
 
     for (i = 0; i < g_class_count; i++) {
         free(g_classes[i]->name);

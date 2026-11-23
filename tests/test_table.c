@@ -6,8 +6,9 @@
 
 static chm_session *session;
 static int (*guest_check)(int);
-static int text_count, switch_count, saw_first, saw_second;
+static int text_count, switch_count, saw_first, saw_second, saw_target;
 static uint32_t switch_color;
+static int saw_target_icon;
 
 static void fail(const char *where, int rc)
 {
@@ -36,8 +37,11 @@ static void inspect(void *context, const chm_draw_command *c)
             if (c->x != 36 || c->y != 72 || c->clip_left < 20 || c->clip_right > 340) fail("cell text geometry", -1);
         }
         if (!strcmp(c->text, "Row 0-1")) saw_second++;
+        if (!strcmp(c->text, "Row 1-1") && c->y == 136 && c->clip_top <= 145 && c->clip_bottom > 145) saw_target++;
         if (c->clip_top < 40 || c->clip_bottom > 200) fail("table text clipping", -1);
     }
+    if (c->kind == 3 && c->x == 36 && c->y == 146 && c->width == 24 && c->height == 24 &&
+        c->clip_top <= c->y && c->clip_bottom >= c->y + c->height && c->text && c->text[0] == 'M') saw_target_icon++;
     if (c->kind == 2) {
         switch_count++;
         if (c->width == 51) switch_color = c->color;
@@ -46,7 +50,7 @@ static void inspect(void *context, const chm_draw_command *c)
 
 static void draw(void)
 {
-    text_count = switch_count = saw_first = saw_second = 0;
+    text_count = switch_count = saw_first = saw_second = saw_target = saw_target_icon = 0;
     switch_color = 0;
     int rc = chm_ui_paint(inspect, NULL, 720, 1280);
     if (rc != 1) fail("drawing", rc);
@@ -77,7 +81,11 @@ int main(int argc, char **argv)
     tap(299, 94, 1); check(1); draw();
     if (switch_color != 0xff55555au) fail("switch off drawing", -1);
     tap(60, 138, 1); check(2);
-    if (chm_ui_scroll(80, 120, 100) != 1) fail("scroll", -1);
+    if (chm_ui_pan(0, 80, 160) < 0 || chm_ui_pan(1, 80, 60) != 1) fail("live drag", -1);
+    draw();
+    if (saw_first || !saw_second || switch_count || saw_target != 1) fail("viewport during drag", -1);
+    if (saw_target_icon != 1) fail("row icon during drag", saw_target_icon);
+    if (chm_ui_pan(2, 80, 60) < 0) fail("end drag", -1);
     tap(60, 145, 1); check(3);
     if (chm_ui_scroll(80, 120, -1000) != 1) fail("scroll back", -1);
     check(4); draw(); check(5);

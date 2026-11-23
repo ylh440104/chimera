@@ -173,6 +173,7 @@ static void ui_layout(void)
         }
         for (ui_view *v = views; v; v = v->next)
             if (v->background_view || v->table) table_update(v);
+            else if (v->scrollable) v->offset = scroll_limit(v, v->offset);
         if (!changed) break;
     }
     if (conflict || pass == 64) chm_session_log(g_sess, "layout: conflicting or nonconvergent equalities");

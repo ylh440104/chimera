@@ -9,6 +9,8 @@
 #define UI_TEXT_MAX 160
 
 typedef struct { double x, y, w, h; } ui_rect;
+typedef struct { double x, y; } ui_point;
+typedef struct { double top, left, bottom, right; } ui_insets;
 
 typedef struct ui_action {
     void *target;
@@ -46,6 +48,7 @@ typedef struct ui_view {
     void *delegate;
     void *data_source;
     void *background_view;
+    void *image;
     double progress;
     unsigned goal_mask;
     double goals[8];
@@ -53,13 +56,16 @@ typedef struct ui_view {
     int disabled;
     int highlighted;
     ui_action *actions;
+    ui_point content_size, offset;
+    ui_insets inset;
+    int scrollable, scroll_disabled, notifying_scroll, dragging;
     int switch_on;
     struct ui_table *table;
     struct ui_cell *cell;
     void *alert_action;
     char *placeholder;
     int secure, keyboard_type, capitalization;
-    int animating;
+    int animating, show_when_stopped;
 } ui_view;
 
 static ui_view *focused_field;
@@ -87,14 +93,14 @@ typedef struct ui_table {
     size_t count, capacity;
     long sections;
     long *row_counts;
-    double row_height, offset, content_height;
+    double row_height, content_height;
     int dirty, loading;
     ui_view *selected;
 } ui_table;
 
 typedef struct ui_cell {
     ui_view *view;
-    void *content, *label, *detail, *accessory, *reuse;
+    void *content, *label, *detail, *icon, *accessory, *reuse;
     long style, accessory_type, selection_style;
     int selected;
     ui_table *table;
@@ -242,6 +248,8 @@ static ui_view *as_view(void *p)
     v->text_color = 0xffffffffu;
     v->number_of_lines = 1;
     v->translates = 1;
+    v->scrollable = chm_objc_is_kind(p, "UIScrollView");
+    v->clips = v->scrollable;
     v->interactive = !chm_objc_is_kind(p, "UILabel") && !chm_objc_is_kind(p, "UIImageView");
     v->next = views;
     views = v;
@@ -300,6 +308,7 @@ static int view_add(ui_view *p, ui_view *c)
     return 1;
 }
 
+#include "ui_scroll.inc"
 #include "ui_geometry.inc"
 
 static void view_remove(ui_view *c)
@@ -396,6 +405,7 @@ static void v_set_frame(void *self, const char *sel, ui_rect rect)
     v->y = rect.y;
     v->w = rect.w;
     v->h = rect.h;
+    if (v->scrollable) v->offset = scroll_limit(v, v->offset);
     layout_dirty = 1;
     container_layout(as_vc(v->owner));
 }
@@ -404,7 +414,7 @@ static ui_rect v_bounds(void *self, const char *sel)
 {
     (void)sel;
     ui_view *v = as_view(self);
-    return v ? n_rect(0, 0, v->w, v->h) : n_rect(0, 0, g_vw, g_vh);
+    return v ? n_rect(v->offset.x, v->offset.y, v->w, v->h) : n_rect(0, 0, g_vw, g_vh);
 }
 
 static void *v_background(void *self, const char *sel)
@@ -1374,6 +1384,7 @@ static void blend_fill(uint32_t *buf, int bw, int bh, int x0, int y0, int x1, in
     }
 }
 
+#include "ui_symbol.inc"
 #include "ui_draw.inc"
 
 int chm_ui_view_count(void)
@@ -1506,10 +1517,12 @@ static const struct {
 void chm_ui_shutdown(chm_session *s)
 {
     if (!s || s != g_sess) return;
+    pan_reset();
     input_reset();
     g_modal = NULL;
     dialogs_shutdown();
     tables_shutdown();
+    symbols_reset();
     while (views) {
         ui_view *next = views->next;
         free(views->kids);
@@ -1556,6 +1569,9 @@ void chm_ui_init(chm_session *s)
     if (!s) return;
     chm_ui_shutdown(g_sess);
     g_sess = s;
+    chm_objc_register_host(s, image_methods, sizeof(image_methods) / sizeof(*image_methods));
+    static const chm_host_method cell_image = {"UITableViewCell", "imageView", "@@:", cell_part, 0};
+    chm_objc_register_host(s, &cell_image, 1);
     chm_scene_application_role = chm_foundation_string(CHM_APPLICATION_ROLE);
     for (i = 0; g_ui_methods[i].sel; i++) {
         chm_method_reg m;

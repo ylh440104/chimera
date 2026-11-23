@@ -3,6 +3,7 @@
 #include "chm_format.h"
 
 #include <dirent.h>
+#include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -282,6 +283,7 @@ chm_session *chm_session_create(void)
     chm_runtime_init();
     chm_libc_set_session(s);
     chm_objc_session_init(s);
+    if (!s->objc_methods) { chm_session_destroy(s); return NULL; }
     chm_foundation_init(s);
     chm_ui_init(s);
     chm_dispatch_set_session(s);
@@ -297,6 +299,7 @@ void chm_session_destroy(chm_session *s)
     chm_dispatch_reset();
     chm_guest_lock();
     chm_ui_shutdown(s);
+    chm_objc_methods_reset(s);
     chm_foundation_shutdown();
     chm_blocks_reset();
     chm_io_reset();
@@ -425,30 +428,32 @@ int chm_session_load(chm_session *s, const char *exe_path)
 
     for (idx = s->image_count - 1; idx >= 0; idx--)
         chm_objc_session_scan(s, idx);
+    chm_objc_index_methods(s);
     chm_libc_publish_images(s);
     s->prepared = true;
     return 0;
 }
 
-static void setup_env(void)
+static int setup_env(void)
 {
-    char root[512];
-    char path[768];
-
-    chm_foundation_map_path("/var/mobile", root, sizeof(root));
-    setenv("HOME", root, 1);
-    setenv("CMC_HOME", root, 1);
-    setenv("TMPDIR", root, 1);
+    char root[1024], path[1280], tmp[1024];
+    if (!chm_foundation_prepare_home() ||
+        !chm_foundation_map_path("/var/mobile", root, sizeof(root)) ||
+        !chm_foundation_map_path("/var/mobile/tmp", tmp, sizeof(tmp))) return 0;
     snprintf(path, sizeof(path), "%s/Library/Caches", root);
-    setenv("CFFIXED_USER_HOME", root, 1);
-    setenv("XDG_CACHE_HOME", path, 1);
+    return setenv("HOME", root, 1) == 0 && setenv("CMC_HOME", root, 1) == 0 &&
+           setenv("TMPDIR", tmp, 1) == 0 && setenv("CFFIXED_USER_HOME", root, 1) == 0 &&
+           setenv("XDG_CACHE_HOME", path, 1) == 0;
 }
 
 int chm_session_run(chm_session *s, int argc, char **argv)
 {
     if (!s || !s->prepared || !s->images[0].executable)
         return -1;
-    setup_env();
+    if (!setup_env()) {
+        chm_session_log(s, "sandbox: could not prepare application directories: %s", strerror(errno));
+        return -1;
+    }
     s->exit_code = chm_session_execute(s, &s->images[0], argc, argv);
     return s->exit_code;
 }

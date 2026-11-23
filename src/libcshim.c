@@ -187,7 +187,10 @@ static int fcntl_impl(int fd, int cmd, void *arg)
 
 static int mkdir_impl(const char *path, int mode)
 {
-    return mkdir(path, (mode_t)mode);
+    char mapped[1024];
+    int rc = chm_foundation_map_mutable(path, mapped, sizeof(mapped)) ? mkdir(mapped, (mode_t)mode) : -1;
+    if (rc < 0) g_errno_cell = io_errno(errno);
+    return rc;
 }
 
 static int kill_impl(int pid, int sig)
@@ -405,10 +408,9 @@ static FILE *fopen_mapped(const char *path, const char *mode)
 
     if (!path || !mode)
         return NULL;
-    if (mode[0] == 'r')
-        chm_foundation_map_path(path, mapped, sizeof(mapped));
-    else
-        chm_foundation_map_path_write(path, mapped, sizeof(mapped));
+    int ok = mode[0] == 'r' && !strchr(mode, '+') ? chm_foundation_map_path(path, mapped, sizeof(mapped)) :
+             chm_foundation_map_path_write(path, mapped, sizeof(mapped));
+    if (!ok) { g_errno_cell = io_errno(errno); return NULL; }
     fp = fopen(mapped, mode);
     if (!fp && g_null_log_session)
         chm_session_log(g_null_log_session, "fopen failed %s mode %s", mapped, mode);

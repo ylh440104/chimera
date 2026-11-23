@@ -76,7 +76,10 @@ class MainActivity : AppCompatActivity() {
             contentDescription = "客机画面"
             visibility = View.GONE
             onGuestTap = { from, to -> tapGuest(from.x, from.y, to.x, to.y) }
-            onGuestScroll = { from, delta -> scrollGuest(from.x, from.y, delta) }
+            onGuestPan = { phase, x, y ->
+                if (phase == PanPhase.BEGIN) panEpoch = serviceEpoch
+                if (!closed && panEpoch == serviceEpoch) panQueue.offer(PanEvent(panEpoch, phase, x, y))
+            }
             onBackend = { hardware ->
                 log(if (hardware) "屏幕绘制：GPU 硬件 Canvas" else "屏幕绘制：软件 Canvas")
                 Native.executor.execute {
@@ -240,7 +243,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun drawGuestFrame(epoch: Long): Boolean {
+    private fun drawGuestFrame(epoch: Long, diagnostic: Boolean = true): Boolean {
         if (closed || epoch != serviceEpoch) return false
         val painter = FramePainter(720, 1280)
         val status = Native.paint(painter, 720, 1280)
@@ -258,11 +261,13 @@ class MainActivity : AppCompatActivity() {
                 buttons()
             }
         }
-        log("提交画面：${next.rectangles} 个色块，${next.texts.size} 条文字")
-        try {
-            File(filesDir, "last-frame-texts.txt").writeText(next.texts.joinToString("\n"))
-        } catch (e: java.io.IOException) {
-            log("保存画面诊断失败：$e")
+        if (diagnostic) {
+            log("提交画面：${next.rectangles} 个色块，${next.texts.size} 条文字")
+            try {
+                File(filesDir, "last-frame-texts.txt").writeText(next.texts.joinToString("\n"))
+            } catch (e: java.io.IOException) {
+                log("保存画面诊断失败：$e")
+            }
         }
         serviceOutputs(epoch)
         return true
@@ -342,9 +347,22 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun scrollGuest(x: Float, y: Float, delta: Float) {
-        interactGuest("滚动客机 ${delta.toInt()}") {
-            Native.scroll(x.toDouble(), y.toDouble(), delta.toDouble())
+    private var panEpoch = -1L
+    private val panQueue = PanQueue(Native.executor) { event ->
+        if (!closed && event.epoch == serviceEpoch) {
+            try {
+                val changed = Native.pan(event.phase.code, event.x.toDouble(), event.y.toDouble())
+                check(changed >= 0) { "拖动回调异常" }
+                if (changed > 0) drawGuestFrame(event.epoch, diagnostic = event.phase != PanPhase.MOVE)
+            } catch (e: Exception) {
+                runOnUiThread {
+                    if (!closed && event.epoch == serviceEpoch && guestLive) {
+                        log("滚动失败：$e")
+                        guestLive = false
+                        buttons()
+                    }
+                }
+            }
         }
     }
 

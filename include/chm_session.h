@@ -68,6 +68,7 @@ typedef struct chm_session {
 
     chm_method_reg *methods;
     int method_count;
+    struct objc_method_store *objc_methods;
 
     char **sels;
     int sel_count;
@@ -90,6 +91,14 @@ void chm_session_report(chm_session *s, char *out, size_t cap);
 
 void chm_objc_session_init(chm_session *s);
 void chm_objc_session_scan(chm_session *s, int img_idx);
+typedef struct {
+    const char *owner, *sel, *types;
+    void *imp;
+    int class_method;
+} chm_host_method;
+void chm_objc_register_host(chm_session *s, const chm_host_method *entries, size_t count);
+void chm_objc_index_methods(chm_session *s);
+void chm_objc_methods_reset(chm_session *s);
 void *chm_objc_session_get_class(chm_session *s, const char *name);
 void *chm_objc_session_get_metaclass(chm_session *s, const char *name);
 void *chm_objc_session_lookup(chm_session *s, const char *name);
@@ -142,10 +151,14 @@ typedef struct {
 int chm_network_next(chm_network_request *request);
 int chm_network_complete(uint64_t token, int status, const void *bytes, size_t length, const char *headers, const char *failure);
 int chm_foundation_map_path(const char *in, char *out, size_t cap);
+int chm_foundation_map_mutable(const char *in, char *out, size_t cap);
 int chm_foundation_map_path_write(const char *in, char *out, size_t cap);
+int chm_foundation_prepare_home(void);
+void *chm_foundation_search_paths(unsigned long dir, unsigned long domains, signed char expand);
 int chm_foundation_isa_is(void *obj, const char *cls_name);
 void *chm_foundation_alloc_obj(const char *cls_name, size_t min);
 void *chm_foundation_string(const char *bytes);
+void *chm_foundation_constant(const char *symbol);
 
 void *chm_objc_cfstr_isa(void);
 void chm_objc_set_cfstr_isa(void *isa);
@@ -202,6 +215,7 @@ int chm_ui_paint(chm_draw_fn draw, void *context, int width, int height);
 int chm_ui_render(uint32_t *buf, int bw, int bh);
 int chm_ui_view_count(void);
 int chm_ui_pointer(int phase, double x, double y);
+int chm_ui_pan(int phase, double x, double y);
 int chm_ui_scroll(double x, double y, double delta);
 uint64_t chm_ui_focused_field(void);
 const char *chm_ui_field_text(void);

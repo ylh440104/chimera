@@ -24,5 +24,7 @@
     { "startAnimating", (void *)activity_animate },
     { "stopAnimating", (void *)activity_animate },
     { "isAnimating", (void *)activity_is_animating },
+    { "setHidesWhenStopped:", (void *)activity_set_hides },
+    { "hidesWhenStopped", (void *)activity_hides },
     { "popoverPresentationController", (void *)popover_get },
     { "setBarButtonItem:", (void *)popover_set },
