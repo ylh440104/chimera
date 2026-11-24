@@ -7,6 +7,8 @@ on:
       - "src/**"
       - "third_party/**"
       - "include/**"
+      - "tests/darwin_formatters.m"
+      - "tests/test_formatters.c"
       - ".github/workflows/apk.yml"
   workflow_dispatch:
 
@@ -52,6 +54,16 @@ jobs:
           printf '%s' "$CHIMERA_SIGNING_STORE" | base64 --decode > "$RUNNER_TEMP/chimera.p12"
           test -s "$RUNNER_TEMP/chimera.p12"
 
+      - name: Darwin formatter device fixture
+        run: |
+          if ! command -v clang-18 >/dev/null || ! command -v ld64.lld-18 >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y clang-18 lld-18
+          fi
+          mkdir -p android/app/src/androidTest/assets
+          clang-18 -target arm64-apple-ios15.0 -O2 -fno-objc-arc -fno-builtin -fno-stack-protector -c tests/darwin_formatters.m -o "$RUNNER_TEMP/darwin_formatters.o"
+          ld64.lld-18 -arch arm64 -platform_version ios 15.0 15.0 -e _main -fixup_chains -undefined dynamic_lookup -o android/app/src/androidTest/assets/darwin_formatters "$RUNNER_TEMP/darwin_formatters.o"
+
       - name: assemble
         env:
           CHIMERA_KEYSTORE_PATH: ${{ runner.temp }}/chimera.p12
@@ -59,7 +71,7 @@ jobs:
         run: |
           test -n "$CHIMERA_KEYSTORE_PASSWORD"
           cd android
-          gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon
+          gradle :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon
 
       - name: archive Android test reports
         if: always()
@@ -79,6 +91,7 @@ jobs:
           mkdir -p dist
           apk="dist/Chimera-${GITHUB_SHA:0:7}.apk"
           cp android/app/build/outputs/apk/debug/app-debug.apk "$apk"
+          cp android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk "dist/Chimera-tests-${GITHUB_SHA:0:7}.apk"
           "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --print-certs "$apk" > dist/certificate.txt
           actual=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' dist/certificate.txt)
           test "$actual" = "$EXPECTED_CERTIFICATE"

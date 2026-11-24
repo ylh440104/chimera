@@ -9,7 +9,7 @@ static int capture_region(JNIEnv *env)
     if (!locale_default) goto failed;
     jmethodID zone_default = (*env)->GetStaticMethodID(env, zone_class, "getDefault", "()Ljava/util/TimeZone;");
     if (!zone_default) goto failed;
-    jmethodID locale_name = (*env)->GetMethodID(env, locale_class, "toLanguageTag", "()Ljava/lang/String;");
+    jmethodID locale_name = (*env)->GetMethodID(env, locale_class, "toString", "()Ljava/lang/String;");
     if (!locale_name) goto failed;
     jmethodID zone_name = (*env)->GetMethodID(env, zone_class, "getID", "()Ljava/lang/String;");
     if (!zone_name) goto failed;
