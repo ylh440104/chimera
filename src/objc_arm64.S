@@ -78,6 +78,7 @@ DARWIN_ENTRY chm_fprintf_entry, x2, chm_fprintf_list
 DARWIN_ENTRY chm_open_entry, x2, chm_open_list
 DARWIN_ENTRY chm_sscanf_entry, x2, chm_sscanf_list
 DARWIN_ENTRY chm_sprintf_chk_entry, x4, chm_sprintf_chk_list
+DARWIN_ENTRY chm_snprintf_entry, x3, chm_snprintf_list
 
 .globl chm_cg_image_create_entry
 .hidden chm_cg_image_create_entry

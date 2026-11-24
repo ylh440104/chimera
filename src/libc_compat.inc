@@ -1,6 +1,7 @@
 extern int vasprintf(char **, const char *, va_list);
 extern void chm_sscanf_entry(void);
 extern void chm_sprintf_chk_entry(void);
+extern void chm_snprintf_entry(void);
 
 typedef struct {
     void *stack, *gr_top, *vr_top;
@@ -70,6 +71,25 @@ invalid:
     free(translated);
     file_failure(EINVAL);
     return NULL;
+}
+
+int chm_snprintf_list(char *buffer, size_t capacity, const char *format, const void *slots)
+{
+    if (!buffer && capacity) return file_failure(EINVAL);
+    char *translated = libc_format(format, 0);
+    if (!translated) return -1;
+    chm_host_va_state state = {.stack = (void *)slots};
+    va_list args;
+    memcpy(&args, &state, sizeof(args));
+    int saved = errno;
+    errno = 0;
+    int result = vsnprintf(buffer, capacity, translated, args);
+    int error = errno;
+    va_end(args);
+    free(translated);
+    if (error) file_failure(error);
+    else errno = saved;
+    return result;
 }
 
 int chm_sscanf_list(const char *input, const char *format, const void *slots)

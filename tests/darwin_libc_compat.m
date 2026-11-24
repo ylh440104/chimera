@@ -4,6 +4,9 @@ typedef struct GuestFILE GuestFILE;
 extern int sscanf(const char *, const char *, ...), vsscanf(const char *, const char *, Args);
 extern int __sprintf_chk(char *, int, Size, const char *, ...);
 extern int __vsprintf_chk(char *, int, Size, const char *, Args);
+extern int snprintf(char *, Size, const char *, ...), vsnprintf(char *, Size, const char *, Args);
+extern int puts(const char *);
+extern long time(long *);
 extern int strcmp(const char *, const char *), memcmp(const void *, const void *, Size);
 extern int setenv(const char *, const char *, int), unsetenv(const char *), abs(int);
 extern char *getenv(const char *);
@@ -43,6 +46,15 @@ static int print_list(char *buffer, Size capacity, const char *format, ...)
     return result;
 }
 
+static int bounded_print(char *buffer, Size capacity, const char *format, ...)
+{
+    Args args;
+    __builtin_va_start(args, format);
+    int result = vsnprintf(buffer, capacity, format, args);
+    __builtin_va_end(args);
+    return result;
+}
+
 static int check_scan(void)
 {
     int a = 0, n = -1;
@@ -75,6 +87,10 @@ static int check_print(void)
     if (__sprintf_chk(buffer, 0, sizeof(buffer), "%*.*f", 8, 3, 1.25) != 8 || strcmp(buffer, "   1.250")) return 12;
     if (print_list(buffer, sizeof(buffer), "%0600.2f", 1.25) != 600 || buffer[0] != '0' || strcmp(buffer + 596, "1.25")) return 13;
     if (__sprintf_chk(buffer, 0, sizeof(buffer), "%d%d%d%d%d%d%d%d%d", 1,2,3,4,5,6,7,8,9) != 9 || strcmp(buffer, "123456789")) return 14;
+    struct { char bytes[5]; char guard[3]; } limited = {{0}, {'Q','R','S'}};
+    if (snprintf(limited.bytes, 5, "%s-%d", "abcdef", 42) != 9 || strcmp(limited.bytes, "abcd") || memcmp(limited.guard, "QRS", 3)) return 15;
+    if (snprintf(0, 0, "%s/%.2f/%lld", "x", 1.25, 4294967301LL) != 17) return 16;
+    if (bounded_print(buffer, sizeof(buffer), "%2$d:%1$.1Lf", (long double)3.5, 17) != 6 || strcmp(buffer, "17:3.5")) return 17;
     return 0;
 }
 
@@ -90,6 +106,7 @@ static int check_file(void)
     if (fwrite("abc",1,3,__stdoutp) != 3 || fseek(__stdoutp,0,0) || fread(text,1,8,__stdoutp) != 3 || !feof(__stdoutp)) return 23;
     rewind(__stdoutp);
     if (feof(__stdoutp) || ferror(__stdoutp) || ftell(__stdoutp) || fread(text,1,3,__stdoutp) != 3 || memcmp(text,"abc",3)) return 24;
+    if (puts("XY") < 0 || fseek(__stdoutp, 3, 0) || fread(text,1,3,__stdoutp) != 3 || memcmp(text,"XY\n",3)) return 25;
     return 0;
 }
 
@@ -115,6 +132,8 @@ static int check_misc(void)
     *__error() = 99;
     for (int i = 0; i < 64; i++) arc4random();
     if (*__error() != 99) return 38;
+    long seconds = 0, returned = time(&seconds), current = time(0);
+    if (returned != seconds || returned < 1700000000 || current < returned || current - returned > 2) return 39;
     return 0;
 }
 

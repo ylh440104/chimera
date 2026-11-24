@@ -368,6 +368,23 @@ int chm_printf_list(const char *fmt, const void *slots)
     return chm_fprintf_list(guest_stdout, fmt, slots);
 }
 
+static int puts_impl(const char *text)
+{
+    if (!text) return file_failure(EINVAL);
+    size_t length = strlen(text);
+    if (write_output(STDOUT_FILENO, text, length) != length || write_output(STDOUT_FILENO, "\n", 1) != 1) return -1;
+    emit_text(text);
+    return 0;
+}
+
+static int64_t time_impl(int64_t *output)
+{
+    time_t value = time(NULL);
+    if (value == (time_t)-1) { file_failure(errno); return -1; }
+    if (output) *output = (int64_t)value;
+    return (int64_t)value;
+}
+
 static int stream_close_impl(FILE *stream)
 {
     if (!stream) return file_failure(EBADF);
@@ -937,6 +954,10 @@ static const chm_entry g_entries[] = {
     FN("_dirname", safe_dirname, "libc.str"),
     FN("_realpath$DARWIN_EXTSN", realpath_impl, "libc.str"),
     FN("_realpath", realpath_impl, "libc.str"),
+    FN("_time", time_impl, "libc.time"),
+    FN("_puts", puts_impl, "libc.io"),
+    FN("_snprintf", chm_snprintf_entry, "libc.io"),
+    FN("_vsnprintf", chm_snprintf_list, "libc.io"),
     FN("_printf", chm_printf_entry, "libc.io"),
     FN("_fprintf", chm_fprintf_entry, "libc.io"),
     FN("_fopen", fopen_mapped, "libc.io"),
