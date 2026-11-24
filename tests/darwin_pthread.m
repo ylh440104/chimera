@@ -157,7 +157,8 @@ int main(void)
     if (pthread_attr_getdetachstate(&a.value, &value) || value != 1 || pthread_attr_setdetachstate(&a.value, 0) != 22) return 3;
     if (pthread_attr_setstacksize(&a.value, 4096) != 22 || pthread_attr_setstacksize(&a.value, 1048576)) return 4;
     if (pthread_attr_getstacksize(&a.value, &size) || size != 1048576) return 5;
-    if (pthread_attr_setguardsize(&a.value, 32768) || pthread_attr_getguardsize(&a.value, &size) || size != 32768) return 6;
+    if (pthread_attr_setguardsize(&a.value, 4096) != 22 || pthread_attr_setguardsize(&a.value, 32768) ||
+        pthread_attr_getguardsize(&a.value, &size) || size != 32768) return 6;
     if (pthread_mutexattr_init(&ma.value) || ma.before != 0xABCD || ma.after != 0xDCBA) return 7;
     if (pthread_mutexattr_gettype(&ma.value, &value) || value != 0 || pthread_mutexattr_settype(&ma.value, 3) != 22) return 8;
     if (pthread_mutexattr_getpshared(&ma.value, &value) || value != 2 || pthread_mutexattr_setpshared(&ma.value, 1) != 45) return 9;

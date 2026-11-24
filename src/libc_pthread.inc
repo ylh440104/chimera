@@ -141,7 +141,7 @@ static int pt_attr_getstacksize(const void *object, size_t *value)
 static int pt_attr_setguardsize(void *object, size_t value)
 {
     pt_attribute attribute;
-    if (pt_attr_read(object, &attribute)) return EINVAL;
+    if (pt_attr_read(object, &attribute) || (value & 16383)) return EINVAL;
     attribute.guard_size = value;
     memcpy(object, &attribute, sizeof(attribute));
     return 0;
