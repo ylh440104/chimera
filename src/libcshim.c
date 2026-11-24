@@ -700,7 +700,7 @@ static void abort_impl(void)
 {
     if (g_null_log_session)
         chm_session_log(g_null_log_session, "abort() called");
-    _exit(134);
+    abort();
 }
 
 static int g_null_strlen_count;
