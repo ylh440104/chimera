@@ -63,8 +63,12 @@ android {
         }
     }
 }
+tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
+    systemProperty("robolectric.dependency.repo.url", "https://repo.maven.apache.org/maven2")
+}
 
 dependencies {
+
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.activity:activity-ktx:1.9.2")
     implementation("com.googlecode.plist:dd-plist:1.30")
