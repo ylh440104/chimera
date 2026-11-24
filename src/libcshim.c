@@ -865,6 +865,8 @@ static char *safe_dirname(char *p)
     return p ? dirname_impl(p) : (char *)".";
 }
 
+#include "libc_compat.inc"
+
 #define FN(n, f, k) { n, (void *)(f), k }
 
 static const chm_entry g_entries[] = {
@@ -913,6 +915,11 @@ static const chm_entry g_entries[] = {
     FN("_fdopen", fdopen_impl, "libc.io"),
     FN("_freopen", fopen_mapped, "libc.io"),
     FN("_fclose", fclose_impl, "libc.io"),
+    FN("_rewind", rewind_impl, "libc.io"),
+    FN("_sscanf", chm_sscanf_entry, "libc.io"),
+    FN("_vsscanf", chm_sscanf_list, "libc.io"),
+    FN("___sprintf_chk", chm_sprintf_chk_entry, "libc.io"),
+    FN("___vsprintf_chk", chm_sprintf_chk_list, "libc.io"),
     FN("_fwrite", fwrite_impl, "libc.io"),
     FN("_fread", fread_impl, "libc.io"),
     FN("_fputs", fputs_impl, "libc.io"),
@@ -965,6 +972,11 @@ static const chm_entry g_entries[] = {
     FN("_usleep", usleep, "libc.proc"),
     FN("_setenv", safe_setenv, "libc.env"),
     FN("_getenv", safe_getenv, "libc.env"),
+    FN("_unsetenv", unsetenv_impl, "libc.env"),
+    FN("_posix_memalign", posix_memalign_impl, "libc.alloc"),
+    FN("_arc4random", arc4random_impl, "libc.random"),
+    FN("_getsectiondata", getsectiondata_impl, "dyld"),
+    FN("_abs", abs, "libc.math"),
     FN("_mmap", mmap, "libc.mem"),
     FN("_mprotect", mprotect, "libc.mem"),
     FN("_munmap", munmap, "libc.mem"),

@@ -76,5 +76,7 @@ DARWIN_ENTRY chm_ns_append_format_entry, x3, chm_ns_append_format_list
 DARWIN_ENTRY chm_printf_entry, x1, chm_printf_list
 DARWIN_ENTRY chm_fprintf_entry, x2, chm_fprintf_list
 DARWIN_ENTRY chm_open_entry, x2, chm_open_list
+DARWIN_ENTRY chm_sscanf_entry, x2, chm_sscanf_list
+DARWIN_ENTRY chm_sprintf_chk_entry, x4, chm_sprintf_chk_list
 
 .section .note.GNU-stack,"",%progbits
