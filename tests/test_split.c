@@ -7,7 +7,7 @@
 static chm_session *session;
 static int (*guest_check)(int);
 static int primary_labels;
-static double primary_right;
+static double primary_left, primary_top, primary_width, primary_right;
 
 static void fail(const char *what, int rc)
 {
@@ -31,6 +31,9 @@ static void inspect(void *context, const chm_draw_command *command)
     (void)context;
     if (command->kind == 1 && !strcmp(command->text, "Primary")) {
         primary_labels++;
+        primary_left = command->x;
+        primary_top = command->y;
+        primary_width = command->width;
         primary_right = command->clip_right;
     }
 }
@@ -40,7 +43,12 @@ static void paint(int width, int height, int primary, double right, int red)
     primary_labels = 0;
     primary_right = 0;
     if (chm_ui_paint(inspect, NULL, width, height) != 1) fail("paint", -1);
-    if (primary_labels != primary || (primary && primary_right != right)) fail("primary clipping", primary_labels);
+    if (primary_labels != primary || (primary && (primary_left != 16 || primary_top != 44 ||
+        primary_width != right - 32 || primary_right != right - 16))) {
+        fprintf(stderr, "primary geometry: count=%d x=%.8g y=%.8g width=%.8g clip_right=%.8g column=%.8g\n",
+                primary_labels, primary_left, primary_top, primary_width, primary_right, right);
+        fail("primary clipping", primary_labels);
+    }
     size_t count = (size_t)width * (size_t)height;
     uint32_t *pixels = calloc(count, sizeof(*pixels));
     if (!pixels || chm_ui_render(pixels, width, height) != 1) fail("render", -1);
