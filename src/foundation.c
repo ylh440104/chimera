@@ -313,7 +313,7 @@ static fo_class *fo_owning(void *cls)
 
 void *chm_foundation_class_ro(void *cls)
 {
-    fo_class *c = fo_owning(cls);
+    fo_class *c = cls == chm_objc_cfstr_isa() ? fo_find("NSConstantString") : fo_owning(cls);
     return c ? &c->ro : NULL;
 }
 

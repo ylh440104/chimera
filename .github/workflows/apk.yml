@@ -67,6 +67,29 @@ jobs:
           clang-18 -target arm64-apple-ios15.0 -O2 -fno-objc-arc -fno-builtin -fno-stack-protector -c tests/darwin_choices.m -o "$RUNNER_TEMP/darwin_choices.o"
           ld64.lld-18 -arch arm64 -platform_version ios 15.0 15.0 -e _main -fixup_chains -exported_symbol _choices_check -undefined dynamic_lookup -o android/app/src/androidTest/assets/darwin_choices "$RUNNER_TEMP/darwin_choices.o"
 
+      - uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository/org/robolectric
+          key: robolectric-4.14.1-instrumented-v1
+
+      - name: prepare Robolectric compile SDK
+        run: |
+          version=15-robolectric-12650502-i7
+          artifact="android-all-instrumented-$version"
+          directory="$HOME/.m2/repository/org/robolectric/android-all-instrumented/$version"
+          mkdir -p "$directory"
+          for extension in pom jar; do
+            file="$artifact.$extension"
+            url="https://repo.maven.apache.org/maven2/org/robolectric/android-all-instrumented/$version/$file"
+            curl --fail --location --retry 5 --retry-all-errors --retry-delay 3 --max-time 120 "$url.sha512" -o "$directory/$file.sha512"
+            digest=$(awk '{print $1}' "$directory/$file.sha512")
+            if ! (cd "$directory" && printf '%s  %s\n' "$digest" "$file" | sha512sum --check --status); then
+              curl --fail --location --retry 5 --retry-all-errors --retry-delay 3 --max-time 120 "$url" -o "$directory/$file.part"
+              (cd "$directory" && printf '%s  %s\n' "$digest" "$file.part" | sha512sum --check)
+              mv "$directory/$file.part" "$directory/$file"
+            fi
+          done
+
       - name: assemble
         env:
           CHIMERA_KEYSTORE_PATH: ${{ runner.temp }}/chimera.p12
