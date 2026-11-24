@@ -1,3 +1,6 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #include "chm_session.h"
 #include "chm_format.h"
 
@@ -165,6 +168,7 @@ static const struct {
     { "NSThread", "NSObject", 32 },
     { "NSRunLoop", "NSObject", 32 },
     { "NSJSONSerialization", "NSObject", 16 },
+    { "NSPropertyListSerialization", "NSObject", 16 },
     { "NSNull", "NSObject", 16 },
     { "NSIndexPath", "NSObject", 32 },
     { "NSIndexSet", "NSObject", 32 },
@@ -2435,6 +2439,7 @@ void chm_foundation_init(chm_session *s)
         c->cls.superclass = &c->parent->cls;
         c->meta.superclass = &c->parent->meta;
     }
+    chm_objc_register_host(s, plist_methods, sizeof(plist_methods) / sizeof(*plist_methods));
     chm_objc_register_host(s, value_methods, sizeof(value_methods) / sizeof(*value_methods));
     chm_objc_register_host(s, file_value_methods, sizeof(file_value_methods) / sizeof(*file_value_methods));
     chm_objc_register_host(s, filter_methods, sizeof(filter_methods) / sizeof(*filter_methods));

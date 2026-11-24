@@ -159,6 +159,15 @@ jobs:
           CHM_SANDBOX_ROOT="$PWD/abi-results/values-root" timeout 30 ./chimera_run "$PWD/abi-results/darwin_values" > abi-results/values.log 2>&1 || { cat abi-results/values.log; exit 1; }
           grep -Fx 'entry returned 0' abi-results/values.log
 
+      - name: XML and binary property list regression
+        run: |
+          clang-18 -target arm64-apple-ios15.0 -O2 -fno-objc-arc -fno-builtin -fno-stack-protector -c tests/darwin_plist.m -o abi-results/darwin_plist.o
+          ld64.lld-18 -arch arm64 -platform_version ios 15.0 15.0 -e _main -fixup_chains -undefined dynamic_lookup -o abi-results/darwin_plist abi-results/darwin_plist.o
+          python3 tests/check_plist.py prepare "$PWD/abi-results/plist-root/mobile"
+          CHM_SANDBOX_ROOT="$PWD/abi-results/plist-root" timeout 30 ./chimera_run "$PWD/abi-results/darwin_plist" > abi-results/plist.log 2>&1 || { cat abi-results/plist.log; exit 1; }
+          grep -Fx 'entry returned 0' abi-results/plist.log
+          python3 tests/check_plist.py verify "$PWD/abi-results/plist-root/mobile" | tee -a abi-results/plist.log
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -201,6 +210,9 @@ jobs:
             abi-results/graphics.log
             abi-results/darwin_values
             abi-results/values.log
+            abi-results/darwin_plist
+            abi-results/plist.log
+            abi-results/plist-root/mobile/*.plist
             tests/graphics.png
             tests/graphics.jpg
 
