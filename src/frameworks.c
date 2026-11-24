@@ -29,16 +29,6 @@ static uint64_t g_af_key;
 
 static const double g_rect_zero[4];
 
-static int64_t cf_zero_i(void)
-{
-    return 0;
-}
-
-static void *cf_null_p(void)
-{
-    return NULL;
-}
-
 static long cf_zero_l(void)
 {
     return 0;
@@ -174,11 +164,6 @@ static void *CFDictionaryGetValue_impl(void *dict, void *key)
 }
 
 static void *CFPreferencesCopyAppValue_impl(void)
-{
-    return NULL;
-}
-
-static void *CFStringCreateMutableCopy_impl(void)
 {
     return NULL;
 }
@@ -462,7 +447,6 @@ static const fw_entry g_fw[] = {
     { "_CFDictionaryGetKeysAndValues", (void *)CFDictionaryGetKeysAndValues_impl },
     { "_CFDictionaryGetValue", (void *)CFDictionaryGetValue_impl },
     { "_CFPreferencesCopyAppValue", (void *)CFPreferencesCopyAppValue_impl },
-    { "_CFStringCreateMutableCopy", (void *)CFStringCreateMutableCopy_impl },
     { "_CFStringCreateWithBytes", (void *)CFStringCreateWithBytes_impl },
     { "_CFStringCapitalize", (void *)CFStringCapitalize_impl },
     { "_CFStringGetMaximumSizeForEncoding", (void *)CFStringGetMaximumSizeForEncoding_impl },
@@ -472,9 +456,6 @@ static const fw_entry g_fw[] = {
     { "_CFRetain", (void *)cf_retain },
     { "_CFEqual", (void *)cf_fail_int },
     { "_CFHash", (void *)cf_zero_l },
-    { "_CFStringGetLength", (void *)cf_zero_i },
-    { "_CFStringGetCStringPtr", (void *)cf_null_p },
-    { "_CFStringGetCString", (void *)cf_fail_int },
     { "_CGColorGetAlpha", CGColorGetAlpha_impl },
     { "_CGColorGetComponents", CGColorGetComponents_impl },
     { "_CGColorGetNumberOfComponents", CGColorGetNumberOfComponents_impl },

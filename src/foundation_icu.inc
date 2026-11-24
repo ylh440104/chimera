@@ -22,6 +22,9 @@ typedef struct {
     int32_t (*number_double)(const void *, double, uint16_t *, int32_t, void *, int32_t *);
     int32_t (*number_integer)(const void *, int64_t, uint16_t *, int32_t, void *, int32_t *);
     void (*number_close)(void *);
+    void *(*transform_open)(const uint16_t *, int32_t, int32_t, const uint16_t *, int32_t, void *, int32_t *);
+    void (*transform_apply)(const void *, uint16_t *, int32_t *, int32_t, int32_t, int32_t *, int32_t *);
+    void (*transform_close)(void *);
 } fo_icu;
 
 static fo_icu icu;
@@ -68,6 +71,9 @@ static int icu_ready(void)
     icu.number_double = icu_symbol("unum_formatDouble");
     icu.number_integer = icu_symbol("unum_formatInt64");
     icu.number_close = icu_symbol("unum_close");
+    icu.transform_open = icu_symbol("utrans_openU");
+    icu.transform_apply = icu_symbol("utrans_transUChars");
+    icu.transform_close = icu_symbol("utrans_close");
     if (!icu.from_utf8 || !icu.to_utf8 || !icu.locale_default || !icu.zone_default || !icu.zone_canonical ||
         !icu.calendar_open || !icu.calendar_millis || !icu.calendar_get || !icu.calendar_close || !icu.date_open ||
         !icu.date_format || !icu.date_parse || !icu.date_lenient || !icu.date_close || !icu.number_open ||

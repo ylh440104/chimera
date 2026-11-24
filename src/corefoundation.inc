@@ -9,6 +9,7 @@ typedef struct {
 typedef struct cf_owned {
     void *object, *allocator;
     size_t references;
+    long string_maximum;
     cf_array_callbacks callbacks;
     struct cf_owned *next;
 } cf_owned;
@@ -54,6 +55,7 @@ static void cf_owned_release(void *object)
             for (int64_t i = 0; i < array->count; i++) entry->callbacks.release(entry->allocator, array->items[i]);
         free(array->items);
     } else if (fo_is_data(object)) free(((fo_data *)object)->bytes);
+    else if (fo_is_string(object)) free(((fo_string *)object)->bytes);
     free(object);
     free(entry);
 }
@@ -250,9 +252,17 @@ static uint32_t cf_bundle_version(void *bundle)
 static void *cf_bundle_main(void) { return singleton("__main_bundle", "NSBundle"); }
 static void *cf_bundle_identifier(void *identifier) { return bundle_by_identifier(NULL, NULL, identifier); }
 
+#include "corefoundation_strings.inc"
+
 void *chm_foundation_cf_lookup(const char *symbol)
 {
     static const struct { const char *name; void *function; } entries[] = {
+        {"_CFStringCreateMutableCopy", cf_string_copy},
+        {"_CFStringCreateCopy", cf_string_immutable_copy},
+        {"_CFStringGetLength", cf_string_length},
+        {"_CFStringGetCString", cf_string_cstring},
+        {"_CFStringGetCStringPtr", cf_string_cstring_ptr},
+        {"_CFStringTransform", cf_string_transform},
         {"_CFDataCreate", cf_data_create},
         {"_CFDataGetBytePtr", cf_data_bytes},
         {"_CFDataGetLength", cf_data_length},

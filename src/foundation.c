@@ -2242,6 +2242,7 @@ static void *bundle_id(void *self, const char *sel)
 #include "foundation_filter.inc"
 #include "foundation_progress.inc"
 #include "foundation_download.inc"
+#include "foundation_icu.inc"
 #include "corefoundation.inc"
 #include "foundation_values.inc"
 #include "foundation_formatters.inc"
@@ -2451,6 +2452,7 @@ void chm_foundation_init(chm_session *s)
         c->meta.superclass = &c->parent->meta;
     }
     chm_objc_set_cfstr_isa(chm_foundation_lookup_class("NSConstantString"));
+    chm_objc_register_host(s, cf_string_methods, sizeof(cf_string_methods) / sizeof(*cf_string_methods));
     chm_objc_register_host(s, date_formatter_methods, sizeof(date_formatter_methods) / sizeof(*date_formatter_methods));
     chm_objc_register_host(s, byte_methods, sizeof(byte_methods) / sizeof(*byte_methods));
     chm_objc_register_host(s, stream_methods, sizeof(stream_methods) / sizeof(*stream_methods));

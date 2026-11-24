@@ -1,5 +1,3 @@
-#include "foundation_icu.inc"
-
 typedef struct region_value {
     void *object;
     char *name;
