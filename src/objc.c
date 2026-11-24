@@ -500,8 +500,9 @@ void *chm_objc_cfstr_isa(void)
 
 void chm_objc_set_cfstr_isa(void *isa)
 {
+    memset(g_cfstr_isa, 0, sizeof(g_cfstr_isa));
     if (isa)
-        memcpy(g_cfstr_isa, isa, 64);
+        memcpy(g_cfstr_isa, isa, sizeof(chm_objc_class));
 }
 
 void *chm_objc_send0(void *obj, const char *sel)

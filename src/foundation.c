@@ -2450,6 +2450,7 @@ void chm_foundation_init(chm_session *s)
         c->cls.superclass = &c->parent->cls;
         c->meta.superclass = &c->parent->meta;
     }
+    chm_objc_set_cfstr_isa(chm_foundation_lookup_class("NSConstantString"));
     chm_objc_register_host(s, date_formatter_methods, sizeof(date_formatter_methods) / sizeof(*date_formatter_methods));
     chm_objc_register_host(s, byte_methods, sizeof(byte_methods) / sizeof(*byte_methods));
     chm_objc_register_host(s, stream_methods, sizeof(stream_methods) / sizeof(*stream_methods));
@@ -2486,7 +2487,7 @@ void chm_foundation_shutdown(void)
     services_shutdown();
     progress_reset();
     constants_reset();
-
+    chm_objc_set_cfstr_isa(NULL);
     for (i = 0; i < g_class_count; i++) {
         free(g_classes[i]->name);
         free(g_classes[i]);

@@ -8,6 +8,7 @@ __attribute__((objc_root_class))
 + (id)new;
 + (Class)class;
 - (id)init;
+- (BOOL)isKindOfClass:(Class)cls;
 @end
 @interface NSString : NSObject
 + (id)stringWithFormat:(NSString *)format, ...;
@@ -169,6 +170,7 @@ int main(void)
     UIWindow *window = [[UIWindow alloc] initWithFrame:(Rect){0,0,400,600}];
     ChoiceSource *source = [ChoiceSource new];
     id names[] = {@"One", @"Two", @"Three"};
+    if (![@"One" isKindOfClass:[NSString class]] || ![@"One" isKindOfClass:[NSObject class]] || [@"One" isKindOfClass:[UIImage class]]) return 104;
     segments = [[UISegmentedControl alloc] initWithItems:[NSArray arrayWithObjects:names count:3]];
     [segments setFrame:(Rect){20,20,300,40}];
     [segments setSelectedSegmentIndex:0];
