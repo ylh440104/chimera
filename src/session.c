@@ -304,8 +304,8 @@ void chm_session_destroy(chm_session *s)
     chm_guest_lock();
     chm_pthread_reset();
     chm_ui_shutdown(s);
-    chm_objc_methods_reset(s);
     chm_foundation_shutdown();
+    chm_objc_methods_reset(s);
     chm_blocks_reset();
     chm_io_reset();
     for (i = 0; i < s->image_count; i++)

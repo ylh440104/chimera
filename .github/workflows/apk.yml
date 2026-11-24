@@ -5,7 +5,7 @@ on:
     paths:
       - "android/**"
       - "src/**"
-      - "third_party/yxml/**"
+      - "third_party/**"
       - "include/**"
       - ".github/workflows/apk.yml"
   workflow_dispatch:

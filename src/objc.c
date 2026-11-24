@@ -460,13 +460,15 @@ static void *retain_impl(void *obj)
 
 static void release_impl(void *obj)
 {
-    (void)obj;
+    chm_foundation_cf_release(obj);
 }
 
 static void store_strong_impl(void **slot, void *obj)
 {
-    if (slot)
-        *slot = obj;
+    if (!slot || *slot == obj) return;
+    void *previous = *slot;
+    *slot = chm_foundation_cf_retain(obj);
+    release_impl(previous);
 }
 
 static void *autorelease_push_impl(void)
@@ -593,8 +595,8 @@ void *chm_objc_session_lookup(chm_session *s, const char *name)
         { "_objc_alloc_init", (void *)alloc_init_impl },
         { "_objc_allocWithZone", (void *)alloc_zone_impl },
         { "_objc_opt_new", (void *)alloc_init_impl },
-        { "_objc_retain", (void *)retain_impl },
-        { "_objc_release", (void *)release_impl },
+        { "_objc_retain", (void *)chm_foundation_cf_retain },
+        { "_objc_release", (void *)chm_foundation_cf_release },
         { "_objc_autorelease", (void *)retain_impl },
         { "_objc_autoreleaseReturnValue", (void *)retain_impl },
         { "_objc_retainAutoreleasedReturnValue", (void *)retain_impl },

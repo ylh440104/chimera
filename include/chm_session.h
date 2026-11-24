@@ -171,6 +171,12 @@ int chm_foundation_isa_is(void *obj, const char *cls_name);
 void *chm_foundation_alloc_obj(const char *cls_name, size_t min);
 void *chm_foundation_string(const char *bytes);
 void *chm_foundation_constant(const char *symbol);
+int chm_foundation_data_bytes(void *object, const void **bytes, size_t *length);
+void *chm_foundation_data(const void *bytes, size_t length);
+void *chm_foundation_cf_lookup(const char *symbol);
+void *chm_foundation_cf_retain(void *object);
+void chm_foundation_cf_release(void *object);
+void chm_graphics_reset(chm_session *session);
 
 void *chm_objc_cfstr_isa(void);
 void chm_objc_set_cfstr_isa(void *isa);

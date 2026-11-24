@@ -49,49 +49,21 @@ static int cf_fail_int(void)
     return -1;
 }
 
-static int64_t CGColorGetAlpha_impl(void *color)
-{
-    (void)color;
-    return 0;
-}
-
-static void *CGColorGetComponents_impl(void *color)
-{
-    (void)color;
-    return NULL;
-}
-
-static void *CGColorSpaceCreateDeviceRGB_impl(void)
-{
-    return NULL;
-}
-
-static void CGColorSpaceRelease_impl(void *space)
-{
-    (void)space;
-}
-
-static void *CGDataProviderCreateWithData_impl(void)
-{
-    return NULL;
-}
-
-static void CGDataProviderRelease_impl(void *p)
-{
-    (void)p;
-}
-
-static void *CGImageCreate_impl(void)
-{
-    return NULL;
-}
-
-static void CGImageRelease_impl(void *img)
-{
-    (void)img;
-}
-
 typedef struct { double x, y, w, h; } cg_rect;
+
+#include "coregraphics.inc"
+
+static void *cf_retain(void *object)
+{
+    if (!object) return NULL;
+    return cg_find(object, 0) ? cg_retain(object) : chm_objc_send0(object, "retain");
+}
+
+static void cf_release(void *object)
+{
+    if (cg_find(object, 0)) cg_release(object);
+    else if (object) chm_objc_send0(object, "release");
+}
 typedef struct { double x, y; } cg_point;
 typedef struct { double a, b, c, d, tx, ty; } cg_transform;
 
@@ -496,21 +468,62 @@ static const fw_entry g_fw[] = {
     { "_CFStringGetMaximumSizeForEncoding", (void *)CFStringGetMaximumSizeForEncoding_impl },
     { "_CFURLCopyPath", (void *)CFURLCopyPath_impl },
     { "_CFURLCreateCopyAppendingPathComponent", (void *)CFURLCreateCopyAppendingPathComponent_impl },
-    { "_CFRelease", (void *)cf_null_p },
-    { "_CFRetain", (void *)cf_null_p },
+    { "_CFRelease", (void *)cf_release },
+    { "_CFRetain", (void *)cf_retain },
     { "_CFEqual", (void *)cf_fail_int },
     { "_CFHash", (void *)cf_zero_l },
     { "_CFStringGetLength", (void *)cf_zero_i },
     { "_CFStringGetCStringPtr", (void *)cf_null_p },
     { "_CFStringGetCString", (void *)cf_fail_int },
-    { "_CGColorGetAlpha", (void *)CGColorGetAlpha_impl },
-    { "_CGColorGetComponents", (void *)CGColorGetComponents_impl },
-    { "_CGColorSpaceCreateDeviceRGB", (void *)CGColorSpaceCreateDeviceRGB_impl },
-    { "_CGColorSpaceRelease", (void *)CGColorSpaceRelease_impl },
-    { "_CGDataProviderCreateWithData", (void *)CGDataProviderCreateWithData_impl },
-    { "_CGDataProviderRelease", (void *)CGDataProviderRelease_impl },
-    { "_CGImageCreate", (void *)CGImageCreate_impl },
-    { "_CGImageRelease", (void *)CGImageRelease_impl },
+    { "_CGColorGetAlpha", CGColorGetAlpha_impl },
+    { "_CGColorGetComponents", CGColorGetComponents_impl },
+    { "_CGColorGetNumberOfComponents", CGColorGetNumberOfComponents_impl },
+    { "_CGColorCreate", CGColorCreate_impl },
+    { "_CGColorRetain", cg_retain },
+    { "_CGColorRelease", cg_release },
+    { "_CGColorSpaceCreateDeviceRGB", CGColorSpaceCreateDeviceRGB_impl },
+    { "_CGColorSpaceCreateDeviceGray", CGColorSpaceCreateDeviceGray_impl },
+    { "_CGColorSpaceGetModel", CGColorSpaceGetModel_impl },
+    { "_CGColorSpaceGetNumberOfComponents", CGColorSpaceGetNumberOfComponents_impl },
+    { "_CGColorSpaceRetain", cg_retain },
+    { "_CGColorSpaceRelease", cg_release },
+    { "_CGDataProviderCreateWithData", CGDataProviderCreateWithData_impl },
+    { "_CGDataProviderCreateWithCFData", CGDataProviderCreateWithCFData_impl },
+    { "_CGDataProviderCreateDirect", CGDataProviderCreateDirect_impl },
+    { "_CGDataProviderCopyData", CGDataProviderCopyData_impl },
+    { "_CGDataProviderRetain", cg_retain },
+    { "_CGDataProviderRelease", cg_release },
+    { "_CGImageCreate", chm_cg_image_create_entry },
+    { "_CGImageCreateCopy", CGImageCreateCopy_impl },
+    { "_CGImageCreateWithPNGDataProvider", CGImageCreateWithPNGDataProvider_impl },
+    { "_CGImageCreateWithJPEGDataProvider", CGImageCreateWithJPEGDataProvider_impl },
+    { "_CGImageGetWidth", cg_width },
+    { "_CGImageGetHeight", cg_height },
+    { "_CGImageGetBitsPerComponent", cg_bits_component },
+    { "_CGImageGetBitsPerPixel", cg_bits_pixel },
+    { "_CGImageGetBytesPerRow", cg_stride },
+    { "_CGImageGetBitmapInfo", cg_bitmap_info },
+    { "_CGImageGetAlphaInfo", cg_alpha_info },
+    { "_CGImageGetColorSpace", cg_color_space },
+    { "_CGImageGetShouldInterpolate", CGImageGetShouldInterpolate_impl },
+    { "_CGImageGetRenderingIntent", CGImageGetRenderingIntent_impl },
+    { "_CGImageRetain", cg_retain },
+    { "_CGImageRelease", cg_release },
+    { "_CGBitmapContextCreate", CGBitmapContextCreate_impl },
+    { "_CGBitmapContextCreateWithData", CGBitmapContextCreateWithData_impl },
+    { "_CGBitmapContextCreateImage", CGBitmapContextCreateImage_impl },
+    { "_CGBitmapContextGetData", CGBitmapContextGetData_impl },
+    { "_CGBitmapContextGetWidth", cg_width },
+    { "_CGBitmapContextGetHeight", cg_height },
+    { "_CGBitmapContextGetBitsPerComponent", cg_bits_component },
+    { "_CGBitmapContextGetBitsPerPixel", cg_bits_pixel },
+    { "_CGBitmapContextGetBytesPerRow", cg_stride },
+    { "_CGBitmapContextGetBitmapInfo", cg_bitmap_info },
+    { "_CGBitmapContextGetAlphaInfo", cg_alpha_info },
+    { "_CGBitmapContextGetColorSpace", cg_color_space },
+    { "_CGContextDrawImage", CGContextDrawImage_impl },
+    { "_CGContextRetain", cg_retain },
+    { "_CGContextRelease", cg_release },
     { "_CGRectContainsPoint", (void *)CGRectContainsPoint_impl },
     { "_CGRectGetMaxX", (void *)CGRectGetMaxX_impl },
     { "_CGRectGetMaxY", (void *)CGRectGetMaxY_impl },
@@ -611,6 +624,8 @@ void *chm_frameworks_lookup(const char *name)
 
     if (!name)
         return NULL;
+    void *foundation = chm_foundation_cf_lookup(name);
+    if (foundation) return foundation;
     for (i = 0; g_fw[i].name; i++) {
         if (strcmp(g_fw[i].name, name) == 0)
             return g_fw[i].addr;

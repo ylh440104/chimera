@@ -79,4 +79,19 @@ DARWIN_ENTRY chm_open_entry, x2, chm_open_list
 DARWIN_ENTRY chm_sscanf_entry, x2, chm_sscanf_list
 DARWIN_ENTRY chm_sprintf_chk_entry, x4, chm_sprintf_chk_list
 
+.globl chm_cg_image_create_entry
+.hidden chm_cg_image_create_entry
+.type chm_cg_image_create_entry, %function
+chm_cg_image_create_entry:
+    mov x9, sp
+    sub sp, sp, #32
+    stp x29, x30, [sp, #16]
+    add x29, sp, #16
+    str x9, [sp]
+    bl chm_cg_image_create_stack
+    ldp x29, x30, [sp, #16]
+    add sp, sp, #32
+    ret
+.size chm_cg_image_create_entry, .-chm_cg_image_create_entry
+
 .section .note.GNU-stack,"",%progbits

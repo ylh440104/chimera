@@ -4,7 +4,7 @@ on:
   push:
     paths:
       - "src/**"
-      - "third_party/yxml/**"
+      - "third_party/**"
       - "include/**"
       - "tests/**"
       - "tools/**"
@@ -145,6 +145,15 @@ jobs:
           CHM_SANDBOX_ROOT="$PWD/abi-results/pthread-root" timeout 30 ./test_pthread "$PWD/abi-results/darwin_pthread" > abi-results/pthread.log 2>&1 || { cat abi-results/pthread.log; exit 1; }
           cat abi-results/pthread.log
 
+      - name: CoreGraphics and CoreFoundation regression
+        run: |
+          clang-18 -target arm64-apple-ios15.0 -O2 -fno-objc-arc -fno-builtin -fno-stack-protector -c tests/darwin_graphics.m -o abi-results/darwin_graphics.o
+          ld64.lld-18 -arch arm64 -platform_version ios 15.0 15.0 -e _main -fixup_chains -undefined dynamic_lookup -o abi-results/darwin_graphics abi-results/darwin_graphics.o
+          mkdir -p abi-results/graphics-root/var/mobile
+          cp tests/graphics.png tests/graphics.jpg abi-results/graphics-root/var/mobile/
+          CHM_SANDBOX_ROOT="$PWD/abi-results/graphics-root" timeout 30 ./chimera_run "$PWD/abi-results/darwin_graphics" > abi-results/graphics.log 2>&1 || { cat abi-results/graphics.log; exit 1; }
+          grep -Fx 'entry returned 0' abi-results/graphics.log
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -183,6 +192,10 @@ jobs:
             abi-results/darwin_libc_compat
             abi-results/pthread.log
             abi-results/darwin_pthread
+            abi-results/darwin_graphics
+            abi-results/graphics.log
+            tests/graphics.png
+            tests/graphics.jpg
 
           if-no-files-found: error
 

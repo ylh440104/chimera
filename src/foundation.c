@@ -676,14 +676,17 @@ static void *singleton(const char *key, const char *cls_name)
     return cached;
 }
 
+static void *cf_owned_retain(void *object);
+static void cf_owned_release(void *object);
+
 static void *o_retain(void *self)
 {
-    return self;
+    return cf_owned_retain(self);
 }
 
 static void o_release(void *self)
 {
-    (void)self;
+    cf_owned_release(self);
 }
 
 static void *o_self(void *self)
@@ -2221,6 +2224,7 @@ static void *bundle_id(void *self, const char *sel)
 #include "foundation_filter.inc"
 #include "foundation_progress.inc"
 #include "foundation_download.inc"
+#include "corefoundation.inc"
 
 static const struct {
     const char *sel;
@@ -2447,6 +2451,8 @@ void chm_foundation_init(chm_session *s)
 void chm_foundation_shutdown(void)
 {
     int i;
+    cf_owned_reset();
+    chm_graphics_reset(g_session);
     services_shutdown();
     progress_reset();
     constants_reset();
