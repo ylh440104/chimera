@@ -1,0 +1,21 @@
+static const chm_host_method split_methods[] = {
+    {"UISplitViewController", "delegate", "@@:", split_delegate, 0},
+    {"UISplitViewController", "setDelegate:", "v@:@", split_set_delegate, 0},
+    {"UISplitViewController", "preferredDisplayMode", "q@:", split_mode, 0},
+    {"UISplitViewController", "displayMode", "q@:", split_mode, 0},
+    {"UISplitViewController", "setPreferredDisplayMode:", "v@:q", split_set_mode, 0},
+    {"UISplitViewController", "preferredSplitBehavior", "q@:", split_behavior, 0},
+    {"UISplitViewController", "splitBehavior", "q@:", split_behavior, 0},
+    {"UISplitViewController", "setPreferredSplitBehavior:", "v@:q", split_set_behavior, 0},
+    {"UISplitViewController", "preferredPrimaryColumnWidthFraction", "d@:", split_width, 0},
+    {"UISplitViewController", "minimumPrimaryColumnWidth", "d@:", split_width, 0},
+    {"UISplitViewController", "maximumPrimaryColumnWidth", "d@:", split_width, 0},
+    {"UISplitViewController", "primaryColumnWidth", "d@:", split_width, 0},
+    {"UISplitViewController", "setPreferredPrimaryColumnWidthFraction:", "v@:d", split_set_width, 0},
+    {"UISplitViewController", "setMinimumPrimaryColumnWidth:", "v@:d", split_set_width, 0},
+    {"UISplitViewController", "setMaximumPrimaryColumnWidth:", "v@:d", split_set_width, 0},
+    {"UIViewController", "splitViewController", "@@:", controller_parent, 0},
+    {"UITableViewController", "initWithStyle:", "@@:q", table_controller_init, 0},
+    {"UITableViewController", "tableView", "@@:", table_controller_view, 0},
+    {"UITableViewController", "setTableView:", "v@:@", table_controller_set_view, 0}
+};

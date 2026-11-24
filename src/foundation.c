@@ -195,6 +195,8 @@ static const struct {
     { "NSTimer", "NSObject", 32 },
     { "NSSortDescriptor", "NSObject", 32 },
     { "UITraitCollection", "NSObject", 32 },
+    { "UISplitViewController", "UIViewController", 512 },
+    { "UITableViewController", "UIViewController", 512 },
     { "UIResponder", "NSObject", 32 },
     { "UIView", "UIResponder", 1024 },
     { "UIWindow", "UIView", 1024 },
@@ -297,7 +299,7 @@ void *chm_foundation_class_ro(void *cls)
     return c ? &c->ro : NULL;
 }
 
-static fo_class *fo_make(const char *name, const char *parent, uint32_t size)
+static fo_class *fo_make(const char *name, uint32_t size)
 {
     fo_class *c = calloc(1, sizeof(*c));
 
@@ -314,13 +316,6 @@ static fo_class *fo_make(const char *name, const char *parent, uint32_t size)
     c->meta.isa = &c->meta;
     c->cls.bits = (uint64_t)(uintptr_t)&c->ro;
     c->meta.bits = (uint64_t)(uintptr_t)&c->ro;
-    if (parent) {
-        c->parent = fo_find(parent);
-        if (c->parent) {
-            c->cls.superclass = &c->parent->cls;
-            c->meta.superclass = &c->parent->meta;
-        }
-    }
     return c;
 }
 
@@ -2415,9 +2410,20 @@ void chm_foundation_init(chm_session *s)
 
         if (g_class_count >= FO_MAX_CLASSES)
             break;
-        c = fo_make(g_seed[i].name, g_seed[i].parent, g_seed[i].size);
+        c = fo_make(g_seed[i].name, g_seed[i].size);
         if (c)
             g_classes[g_class_count++] = c;
+    }
+    for (i = 0; g_seed[i].name; i++) {
+        fo_class *c = fo_find(g_seed[i].name);
+        if (!c || !g_seed[i].parent) continue;
+        c->parent = fo_find(g_seed[i].parent);
+        if (!c->parent) {
+            chm_session_log(s, "foundation: missing parent %s for %s", g_seed[i].parent, c->name);
+            continue;
+        }
+        c->cls.superclass = &c->parent->cls;
+        c->meta.superclass = &c->parent->meta;
     }
     chm_objc_register_host(s, file_value_methods, sizeof(file_value_methods) / sizeof(*file_value_methods));
     chm_objc_register_host(s, filter_methods, sizeof(filter_methods) / sizeof(*filter_methods));

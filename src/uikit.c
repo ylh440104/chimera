@@ -134,6 +134,10 @@ typedef struct ui_vc {
     int syncing;
     int appeared;
     int bar_hidden;
+    void *split_delegate;
+    long split_mode, split_behavior, table_style;
+    double split_fraction, split_minimum, split_maximum;
+    int split_widths_ready, split_laying_out;
     struct ui_vc *presenting;
     struct ui_vc *previous_modal;
 } ui_vc;
@@ -607,10 +611,18 @@ static void wc_load_view(void *self, const char *sel)
     (void)sel;
     ui_vc *vc = as_vc(self);
     if (!vc || vc->view) return;
-    void *object = chm_foundation_alloc_obj("UIView", 0);
+    int table = chm_objc_is_kind(self, "UITableViewController");
+    void *object = chm_foundation_alloc_obj(table ? "UITableView" : "UIView", 0);
     ui_view *v = as_view(object);
     if (!v) return;
     view_init(v, 0, 0, g_vw, g_vh);
+    if (table) {
+        v->clips = 1;
+        v->bg = vc->table_style ? 0xff1c1c1eu : 0xff000000u;
+        v->delegate = self;
+        v->data_source = self;
+        if (!table_state(object)) return;
+    }
     v->owner = self;
     vc->view = object;
 }
@@ -655,6 +667,31 @@ static void wc_set_view(void *self, const char *sel, void *view)
         as_view(view)->owner = self;
 }
 
+static void *table_controller_init(void *self, const char *sel, long style)
+{
+    (void)sel;
+    ui_vc *vc = as_vc(self);
+    if (!vc || style < 0 || style > 2) return NULL;
+    vc->table_style = style;
+    return self;
+}
+
+static void *table_controller_view(void *self, const char *sel)
+{
+    return wc_view(self, sel);
+}
+
+static void table_controller_set_view(void *self, const char *sel, void *view)
+{
+    if (view && !chm_objc_is_kind(view, "UITableView")) return;
+    wc_set_view(self, sel, view);
+    if (view) {
+        ui_view *v = as_view(view);
+        if (v) { v->delegate = self; v->data_source = self; }
+        table_state(view);
+    }
+}
+
 static void wc_view_did_load(void *self, const char *sel)
 {
     (void)sel;
@@ -666,6 +703,7 @@ static int container_kind(ui_vc *vc)
     if (!vc) return 0;
     if (chm_objc_is_kind(vc->object, "UINavigationController")) return 1;
     if (chm_objc_is_kind(vc->object, "UITabBarController")) return 2;
+    if (chm_objc_is_kind(vc->object, "UISplitViewController")) return 3;
     return 0;
 }
 
@@ -690,15 +728,24 @@ static void controller_appearance(ui_vc *vc, int appearing, int animated)
     void (*fn)(void *, const char *, signed char) = chm_objc_find_imp(vc->object, will);
     if (fn) fn(vc->object, will, animated != 0);
     vc->appeared = appearing;
-    controller_appearance(vc->active_child, appearing, animated);
+    if (container_kind(vc) == 3) {
+        for (size_t i = 0; i < vc->child_count; i++) {
+            ui_vc *child = as_vc(vc->children[i]);
+            ui_view *view = child ? as_view(child->view) : NULL;
+            if (view && view->parent == as_view(vc->view) && !view->hidden)
+                controller_appearance(child, appearing, animated);
+        }
+    } else controller_appearance(vc->active_child, appearing, animated);
     fn = chm_objc_find_imp(vc->object, did);
     if (fn) fn(vc->object, did, animated != 0);
 }
 
+#include "ui_split.inc"
+
 static void *container_bar(ui_vc *vc)
 {
     int kind = container_kind(vc);
-    if (!kind) return NULL;
+    if (kind != 1 && kind != 2) return NULL;
     if (!vc->bar) {
         vc->bar = chm_foundation_alloc_obj(kind == 1 ? "UINavigationBar" : "UITabBar", 0);
         ui_view *bar = as_view(vc->bar);
@@ -712,6 +759,7 @@ static void container_layout(ui_vc *vc)
 {
     int kind = container_kind(vc);
     if (!kind || !vc->view) return;
+    if (kind == 3) { split_layout(vc); return; }
     ui_view *root = as_view(vc->view);
     ui_view *bar = as_view(container_bar(vc));
     if (!root || !bar) return;
@@ -740,6 +788,11 @@ static void container_sync(ui_vc *vc)
     int kind = container_kind(vc);
     if (!kind || !vc->view || vc->loading || vc->syncing) return;
     vc->syncing = 1;
+    if (kind == 3) {
+        split_sync(vc);
+        vc->syncing = 0;
+        return;
+    }
     size_t index = kind == 1 && vc->child_count ? vc->child_count - 1 : vc->selected;
     ui_vc *next = index < vc->child_count ? as_vc(vc->children[index]) : NULL;
     if (next != vc->active_child) {
@@ -767,6 +820,7 @@ static void container_sync(ui_vc *vc)
 static int container_set(ui_vc *vc, void *const *objects, size_t count)
 {
     if (!container_kind(vc) || (count && !objects) || count > SIZE_MAX / sizeof(void *)) return 0;
+    if (container_kind(vc) == 3 && count > 2) return 0;
     for (size_t i = 0; i < count; i++) {
         ui_vc *child = as_vc(objects[i]);
         if (!child || (child->parent && child->parent != vc)) return 0;
@@ -780,6 +834,14 @@ static int container_set(ui_vc *vc, void *const *objects, size_t count)
     void *selected = vc->selected < vc->child_count ? vc->children[vc->selected] : NULL;
     for (size_t i = 0; i < vc->child_count; i++) {
         ui_vc *child = as_vc(vc->children[i]);
+        if (container_kind(vc) == 3 && child) {
+            int retained = 0;
+            for (size_t j = 0; j < count; j++) retained |= copy[j] == child->object;
+            if (!retained) {
+                controller_appearance(child, 0, 0);
+                view_remove(as_view(child->view));
+            }
+        }
         if (child && child->parent == vc) child->parent = NULL;
     }
     free(vc->children);
@@ -890,7 +952,8 @@ static void *controller_parent(void *self, const char *sel)
     while (parent) {
         if (!strcmp(sel, "parentViewController") ||
             (!strcmp(sel, "navigationController") && container_kind(parent) == 1) ||
-            (!strcmp(sel, "tabBarController") && container_kind(parent) == 2)) return parent->object;
+            (!strcmp(sel, "tabBarController") && container_kind(parent) == 2) ||
+            (!strcmp(sel, "splitViewController") && container_kind(parent) == 3)) return parent->object;
         parent = parent->parent;
     }
     return NULL;
@@ -1597,6 +1660,8 @@ void chm_ui_shutdown(chm_session *s)
     g_running = 0;
 }
 
+#include "ui_split_methods.inc"
+
 void chm_ui_init(chm_session *s)
 {
     int i;
@@ -1604,6 +1669,7 @@ void chm_ui_init(chm_session *s)
     if (!s) return;
     chm_ui_shutdown(g_sess);
     g_sess = s;
+    chm_objc_register_host(s, split_methods, sizeof(split_methods) / sizeof(*split_methods));
     chm_objc_register_host(s, clock_methods, sizeof(clock_methods) / sizeof(*clock_methods));
     chm_objc_register_host(s, image_methods, sizeof(image_methods) / sizeof(*image_methods));
     static const chm_host_method cell_image = {"UITableViewCell", "imageView", "@@:", cell_part, 0};
