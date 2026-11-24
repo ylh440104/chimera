@@ -113,7 +113,7 @@ int chm_scene_connect(chm_session *s, void *app, void *delegate)
     chosen = lookup(initial);
     if (configure) chosen = lookup(configure(delegate, pick, app, session_obj, options));
     if (!chosen || !chosen->scene_class || !chosen->delegate_class) { chm_session_log(s, "scene: no usable configuration for %s", CHM_APPLICATION_ROLE); return -1; }
-    if (chosen->entry && chosen->entry->storyboard[0]) { chm_session_log(s, "scene: storyboard not implemented: %s", chosen->entry->storyboard); return -1; }
+    if (chosen->entry && chosen->entry->storyboard[0]) { chm_session_log(s, "scene: unsupported storyboard configuration: %s", chosen->entry->storyboard); return -1; }
     const char *dn = chm_objc_class_name(chosen->delegate_class);
     scene_obj = chm_objc_new_object(chm_objc_class_name(chosen->scene_class));
     scene_delegate = dn ? chm_objc_new_object(dn) : NULL;

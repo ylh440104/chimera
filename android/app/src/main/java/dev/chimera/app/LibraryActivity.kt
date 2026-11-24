@@ -99,7 +99,7 @@ class LibraryActivity : AppCompatActivity() {
                     library.migrateLegacy({ !closed }) { updateStatus("迁移上次导入的应用 · $it") }
                         ?.let { messages.add("${it.name} 已加入应用库，原有数据已保留") }
                 }
-            } catch (e: Exception) { messages.add("旧应用迁移未完成：${e.message}。可重新导入，原有数据会保留。") }
+            } catch (e: Exception) { messages.add("旧应用迁移失败：${e.message}。可重新导入，原有数据会保留。") }
             publish(messages)
         }
     }
