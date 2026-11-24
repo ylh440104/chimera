@@ -866,10 +866,36 @@ static char *safe_dirname(char *p)
 }
 
 #include "libc_compat.inc"
+#include "libc_pthread.inc"
 
 #define FN(n, f, k) { n, (void *)(f), k }
 
 static const chm_entry g_entries[] = {
+    FN("_pthread_create", pt_create, "libc.pthread"),
+    FN("_pthread_join", pt_join, "libc.pthread"),
+    FN("_pthread_detach", pt_detach, "libc.pthread"),
+    FN("_pthread_exit", pt_exit, "libc.pthread"),
+    FN("_pthread_self", pt_self, "libc.pthread"),
+    FN("_pthread_equal", pt_equal, "libc.pthread"),
+    FN("_pthread_attr_init", pt_attr_init, "libc.pthread"),
+    FN("_pthread_attr_destroy", pt_attr_destroy, "libc.pthread"),
+    FN("_pthread_attr_setdetachstate", pt_attr_setdetachstate, "libc.pthread"),
+    FN("_pthread_attr_getdetachstate", pt_attr_getdetachstate, "libc.pthread"),
+    FN("_pthread_attr_setstacksize", pt_attr_setstacksize, "libc.pthread"),
+    FN("_pthread_attr_getstacksize", pt_attr_getstacksize, "libc.pthread"),
+    FN("_pthread_attr_setguardsize", pt_attr_setguardsize, "libc.pthread"),
+    FN("_pthread_attr_getguardsize", pt_attr_getguardsize, "libc.pthread"),
+    FN("_pthread_mutexattr_init", pt_mutexattr_init, "libc.pthread"),
+    FN("_pthread_mutexattr_destroy", pt_mutexattr_destroy, "libc.pthread"),
+    FN("_pthread_mutexattr_settype", pt_mutexattr_settype, "libc.pthread"),
+    FN("_pthread_mutexattr_gettype", pt_mutexattr_gettype, "libc.pthread"),
+    FN("_pthread_mutexattr_setpshared", pt_mutexattr_setpshared, "libc.pthread"),
+    FN("_pthread_mutexattr_getpshared", pt_mutexattr_getpshared, "libc.pthread"),
+    FN("_pthread_mutex_init", pt_mutex_init, "libc.pthread"),
+    FN("_pthread_mutex_destroy", pt_mutex_destroy, "libc.pthread"),
+    FN("_pthread_mutex_lock", pt_mutex_lock, "libc.pthread"),
+    FN("_pthread_mutex_trylock", pt_mutex_trylock, "libc.pthread"),
+    FN("_pthread_mutex_unlock", pt_mutex_unlock, "libc.pthread"),
     FN("_crc32", crc32, "libz"),
     FN("_get_crc_table", get_crc_table, "libz"),
     FN("_deflateInit2_", deflateInit2_, "libz"),

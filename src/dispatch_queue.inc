@@ -204,7 +204,7 @@ void chm_dispatch_set_session(chm_session *session)
     atomic_store(&queue_stopping, 0);
     pthread_mutex_unlock(&queue_lock);
 }
-void chm_dispatch_reset(void)
+void chm_dispatch_stop(void)
 {
     pthread_mutex_lock(&queue_lock);
     atomic_store(&queue_stopping, 1);
@@ -213,6 +213,10 @@ void chm_dispatch_reset(void)
             if (q->jobs[i].waiter) { q->jobs[i].waiter->done = 1; q->jobs[i].waiter = NULL; }
     pthread_cond_broadcast(&queue_changed);
     pthread_mutex_unlock(&queue_lock);
+}
+void chm_dispatch_reset(void)
+{
+    chm_dispatch_stop();
     unsigned depth = chm_guest_suspend();
     for (size_t i = 0; i < worker_count; i++) pthread_join(workers[i], NULL);
     chm_guest_resume(depth);
@@ -237,7 +241,7 @@ static void queue_after(uint64_t when, void *q, void *b) { queue_put(q, b, NULL,
 static void queue_after_f(uint64_t when, void *q, void *context, void (*function)(void *)) { queue_put(q, NULL, function, context, when, NULL, NULL); }
 static void queue_sync_common(void *q, void *b, void *context, void (*function)(void *))
 {
-    if ((!worker_thread && q == &main_queue) || q == current_queue) {
+    if ((!worker_thread && !chm_pthread_worker() && q == &main_queue) || q == current_queue) {
         queue_job job = {.block = b, .function = function, .context = context};
         invoke_job(&job);
         return;

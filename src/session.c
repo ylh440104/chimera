@@ -281,6 +281,7 @@ chm_session *chm_session_create(void)
         return NULL;
     }
     chm_runtime_init();
+    chm_pthread_init();
     chm_libc_set_session(s);
     chm_objc_session_init(s);
     if (!s->objc_methods) { chm_session_destroy(s); return NULL; }
@@ -296,8 +297,12 @@ void chm_session_destroy(chm_session *s)
 
     if (!s)
         return;
+    chm_pthread_stop();
+    chm_dispatch_stop();
+    chm_pthread_drain();
     chm_dispatch_reset();
     chm_guest_lock();
+    chm_pthread_reset();
     chm_ui_shutdown(s);
     chm_objc_methods_reset(s);
     chm_foundation_shutdown();

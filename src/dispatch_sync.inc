@@ -10,7 +10,7 @@ static void queue_barrier_async_f(void *q, void *context, void (*function)(void 
 
 static void queue_barrier_sync_common(void *q, void *block, void *context, void (*function)(void *))
 {
-    if (q == current_queue || (!worker_thread && q == &main_queue)) {
+    if (q == current_queue || (!worker_thread && !chm_pthread_worker() && q == &main_queue)) {
         chm_session_log(queue_session, "dispatch: synchronous barrier on current queue");
         abort();
     }

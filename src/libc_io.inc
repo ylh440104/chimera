@@ -273,7 +273,8 @@ static ssize_t io_transfer(int guest, void *buffer, size_t length, int writing)
     ssize_t result = -1;
     int error = 0;
     for (;;) {
-        if (chm_dispatch_worker() && chm_dispatch_stopping()) { error = ECANCELED; break; }
+        if ((chm_dispatch_worker() && chm_dispatch_stopping()) ||
+            (chm_pthread_worker() && chm_pthread_stopping())) { error = ECANCELED; break; }
         if (polled && !nonblocking) {
             struct pollfd p = {snapshot, writing ? POLLOUT : POLLIN, 0};
             int ready = poll(&p, 1, 20);
@@ -330,7 +331,8 @@ static unsigned int io_sleep(unsigned int seconds)
     do {
         clock_gettime(CLOCK_MONOTONIC, &now);
         current = (uint64_t)now.tv_sec * 1000000000u + now.tv_nsec;
-        if (current >= target || (chm_dispatch_worker() && chm_dispatch_stopping())) break;
+        if (current >= target || (chm_dispatch_worker() && chm_dispatch_stopping()) ||
+            (chm_pthread_worker() && chm_pthread_stopping())) break;
         nanosleep(&pause, NULL);
     } while (1);
     chm_guest_resume(depth);

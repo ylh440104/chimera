@@ -59,7 +59,7 @@ jobs:
           for tool in chmdump chmdemand chimera_run; do
             cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -pthread -Iinclude -Ithird_party/yxml -o "$tool" "tools/$tool.c" $SRC -lm -ldl -lz
           done
-          for test in test_input test_table test_services test_startup test_transfer test_split test_sync test_libc_compat probe_version; do
+          for test in test_input test_table test_services test_startup test_transfer test_split test_sync test_libc_compat test_pthread probe_version; do
             cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -pthread -Iinclude -Ithird_party/yxml -o "$test" "tests/$test.c" $SRC -lm -ldl -lz
           done
           ./chmdump tests/fixture.ios > dump.txt
@@ -137,6 +137,14 @@ jobs:
           CHM_SANDBOX_ROOT="$PWD/abi-results/libc-root" timeout 30 ./test_libc_compat "$PWD/abi-results/darwin_libc_compat" > abi-results/libc.log 2>&1 || { cat abi-results/libc.log; exit 1; }
           cat abi-results/libc.log
 
+      - name: pthread compatibility regression
+        run: |
+          clang-18 -target arm64-apple-ios15.0 -O2 -fno-builtin -fno-stack-protector -c tests/darwin_pthread.m -o abi-results/darwin_pthread.o
+          ld64.lld-18 -arch arm64 -platform_version ios 15.0 15.0 -e _main -fixup_chains -exported_symbol _pthread_check -undefined dynamic_lookup -o abi-results/darwin_pthread abi-results/darwin_pthread.o
+          mkdir -p abi-results/pthread-root
+          CHM_SANDBOX_ROOT="$PWD/abi-results/pthread-root" timeout 30 ./test_pthread "$PWD/abi-results/darwin_pthread" > abi-results/pthread.log 2>&1 || { cat abi-results/pthread.log; exit 1; }
+          cat abi-results/pthread.log
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -173,6 +181,8 @@ jobs:
             abi-results/darwin_geometry
             abi-results/libc.log
             abi-results/darwin_libc_compat
+            abi-results/pthread.log
+            abi-results/darwin_pthread
 
           if-no-files-found: error
 
@@ -195,5 +205,6 @@ jobs:
             test_split
             test_sync
             test_libc_compat
+            test_pthread
             probe_version
           if-no-files-found: error
