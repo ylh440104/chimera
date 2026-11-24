@@ -210,6 +210,46 @@ static unsigned long cf_type_id(void *object)
 
 static void *cf_runloop_main(void) { return main_run_loop(); }
 
+static uint32_t cf_bundle_version(void *bundle)
+{
+    if (!bundle || !fo_isa_is(bundle, "NSBundle")) return 0;
+    void *info = bundle_metadata(bundle);
+    void *value = d_value(info, NULL, fo_string_new("CFBundleVersion"));
+    if (fo_is_number(value)) return (uint32_t)o_integer(value);
+    if (!fo_is_string(value) && !fo_is_cfstring(value)) return 0;
+    const char *text = fo_bytes(value);
+    size_t length = strlen(text);
+    if (!length || length > 10) return 0;
+    unsigned major = 0, minor = 0, patch = 0, stage = 0x80, build = 0;
+    const char *p = text;
+    int more = 1;
+    if (*p >= '0' && *p <= '9') {
+        major = (unsigned)(*p++ - '0');
+        if (*p >= '0' && *p <= '9') major = major * 10 + (unsigned)(*p++ - '0');
+        if (*p == '.') p++;
+        else more = 0;
+    } else if (*p == '.') p++;
+    else more = 0;
+    if (more && *p >= '0' && *p <= '9') {
+        minor = (unsigned)(*p++ - '0');
+        if (*p == '.') p++;
+        else more = 0;
+    } else more = 0;
+    if (more && *p >= '0' && *p <= '9') patch = (unsigned)(*p++ - '0');
+    if (*p) {
+        stage = *p == 'd' ? 0x20 : *p == 'a' ? 0x40 : *p == 'b' ? 0x60 : *p == 'f' ? 0x80 : 0;
+        if (!stage) return 0;
+        p++;
+        unsigned digits = 0;
+        while (*p >= '0' && *p <= '9' && digits++ < 3) build = build * 10 + (unsigned)(*p++ - '0');
+        if (*p || build > 255) return 0;
+    }
+    return (major / 10 << 28) | (major % 10 << 24) | (minor << 20) | (patch << 16) | (stage << 8) | build;
+}
+
+static void *cf_bundle_main(void) { return singleton("__main_bundle", "NSBundle"); }
+static void *cf_bundle_identifier(void *identifier) { return bundle_by_identifier(NULL, NULL, identifier); }
+
 void *chm_foundation_cf_lookup(const char *symbol)
 {
     static const struct { const char *name; void *function; } entries[] = {
@@ -226,6 +266,9 @@ void *chm_foundation_cf_lookup(const char *symbol)
         {"_CFHash", cf_hash},
         {"_CFGetTypeID", cf_type_id},
         {"_CFRunLoopGetMain", cf_runloop_main},
+        {"_CFBundleGetVersionNumber", cf_bundle_version},
+        {"_CFBundleGetMainBundle", cf_bundle_main},
+        {"_CFBundleGetBundleWithIdentifier", cf_bundle_identifier},
         {"_kCFTypeArrayCallBacks", (void *)&cf_type_array_callbacks}
     };
     for (size_t i = 0; i < sizeof(entries) / sizeof(*entries); i++)

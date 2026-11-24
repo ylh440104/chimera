@@ -145,6 +145,9 @@ static const struct {
     { "NSData", "NSObject", 32 },
     { "NSMutableData", "NSData", 32 },
     { "NSDate", "NSObject", 32 },
+    { "NSFormatter", "NSObject", 32 },
+    { "NSDateFormatter", "NSFormatter", 32 },
+    { "NSByteCountFormatter", "NSFormatter", 32 },
     { "NSURL", "NSObject", 32 },
     { "NSURLRequest", "NSObject", 32 },
     { "NSMutableURLRequest", "NSURLRequest", 32 },
@@ -2238,6 +2241,8 @@ static void *bundle_id(void *self, const char *sel)
 #include "foundation_download.inc"
 #include "corefoundation.inc"
 #include "foundation_values.inc"
+#include "foundation_formatters.inc"
+#include "foundation_byte_count.inc"
 
 static const struct {
     const char *sel;
@@ -2442,6 +2447,8 @@ void chm_foundation_init(chm_session *s)
         c->cls.superclass = &c->parent->cls;
         c->meta.superclass = &c->parent->meta;
     }
+    chm_objc_register_host(s, date_formatter_methods, sizeof(date_formatter_methods) / sizeof(*date_formatter_methods));
+    chm_objc_register_host(s, byte_methods, sizeof(byte_methods) / sizeof(*byte_methods));
     chm_objc_register_host(s, stream_methods, sizeof(stream_methods) / sizeof(*stream_methods));
     chm_objc_register_host(s, xml_methods, sizeof(xml_methods) / sizeof(*xml_methods));
     chm_objc_register_host(s, plist_methods, sizeof(plist_methods) / sizeof(*plist_methods));
@@ -2471,6 +2478,8 @@ void chm_foundation_shutdown(void)
     cf_owned_reset();
     chm_graphics_reset(g_session);
     values_reset();
+    byte_reset();
+    formatters_reset();
     services_shutdown();
     progress_reset();
     constants_reset();

@@ -12,6 +12,8 @@
 
 static chm_session *g_session;
 
+#include "region.inc"
+
 static void log_text(const char *text)
 {
     __android_log_write(ANDROID_LOG_INFO, TAG, text);
@@ -37,6 +39,12 @@ JNIEXPORT jstring JNICALL Java_dev_chimera_app_Native_load(JNIEnv *env, jclass c
     g_session = chm_session_create();
     if (!g_session)
         return (*env)->NewStringUTF(env, "session allocation failed");
+    if (!capture_region(env)) {
+        chm_session_destroy(g_session);
+        g_session = NULL;
+        if ((*env)->ExceptionCheck(env)) return NULL;
+        return (*env)->NewStringUTF(env, "device locale and time zone unavailable");
+    }
     p = (*env)->GetStringUTFChars(env, path, NULL);
     if (!p) {
         chm_session_destroy(g_session);

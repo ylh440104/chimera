@@ -59,7 +59,7 @@ jobs:
           for tool in chmdump chmdemand chimera_run; do
             cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -pthread -Iinclude -Ithird_party/yxml -o "$tool" "tools/$tool.c" $SRC -lm -ldl -lz
           done
-          for test in test_input test_table test_services test_startup test_transfer test_split test_sync test_libc_compat test_pthread test_streams probe_version; do
+          for test in test_input test_table test_services test_startup test_transfer test_split test_sync test_libc_compat test_pthread test_streams test_formatters probe_version; do
             cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -pthread -Iinclude -Ithird_party/yxml -o "$test" "tests/$test.c" $SRC -lm -ldl -lz
           done
           ./chmdump tests/fixture.ios > dump.txt
@@ -176,6 +176,14 @@ jobs:
           CHM_SANDBOX_ROOT="$PWD/abi-results/streams-root" timeout 30 ./test_streams "$PWD/abi-results/darwin_streams" > abi-results/streams.log 2>&1 || { cat abi-results/streams.log; exit 1; }
           cat abi-results/streams.log
 
+      - name: Date byte count and bundle version regression
+        run: |
+          clang-18 -target arm64-apple-ios15.0 -O2 -fno-objc-arc -fno-builtin -fno-stack-protector -c tests/darwin_formatters.m -o abi-results/darwin_formatters.o
+          ld64.lld-18 -arch arm64 -platform_version ios 15.0 15.0 -e _main -fixup_chains -undefined dynamic_lookup -o abi-results/darwin_formatters abi-results/darwin_formatters.o
+          mkdir -p abi-results/formatters-root/mobile/version
+          CHM_SANDBOX_ROOT="$PWD/abi-results/formatters-root" timeout 30 ./test_formatters "$PWD/abi-results/darwin_formatters" > abi-results/formatters.log 2>&1 || { cat abi-results/formatters.log; exit 1; }
+          cat abi-results/formatters.log
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -220,6 +228,8 @@ jobs:
             abi-results/values.log
             abi-results/darwin_streams
             abi-results/streams.log
+            abi-results/darwin_formatters
+            abi-results/formatters.log
             abi-results/darwin_plist
             abi-results/plist.log
             abi-results/plist-root/mobile/*.plist
@@ -249,5 +259,6 @@ jobs:
             test_libc_compat
             test_pthread
             test_streams
+            test_formatters
             probe_version
           if-no-files-found: error

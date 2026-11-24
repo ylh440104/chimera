@@ -149,6 +149,7 @@ void *chm_foundation_lookup_method(const char *cls_name, const char *sel);
 void chm_foundation_note_missing_selector(const char *cls_name, const char *sel);
 void chm_foundation_set_root(const char *root);
 void chm_foundation_set_bundle(const char *root);
+void chm_foundation_set_region(const char *locale, const char *zone);
 void *chm_foundation_bundle_info(void);
 typedef struct {
     uint64_t token;

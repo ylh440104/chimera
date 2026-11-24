@@ -86,6 +86,18 @@ jobs:
           cd dist
           sha256sum *.apk > SHA256SUMS
 
+      - name: Android native formatter runner
+        run: |
+          compiler="$ANDROID_HOME/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
+          "$compiler" -O2 -g -Wall -Wextra -Wno-unused-parameter -std=gnu11 -Ithird_party/yxml -c third_party/yxml/yxml.c -o "$RUNNER_TEMP/yxml-android.o"
+          "$compiler" -O2 -g -Wall -Wextra -Werror -std=gnu11 -pthread -Iinclude -Ithird_party/yxml \
+            -o dist/test_formatters_android tests/test_formatters.c src/macho.c src/fixups.c src/session.c \
+            src/objc.c src/objc_arm64.S src/libcshim.c src/dispatch.c src/foundation.c src/frameworks.c \
+            src/format.c src/uikit.c src/scene.c src/scene_manifest.c src/trap.c src/loader.c \
+            "$RUNNER_TEMP/yxml-android.o" -lm -ldl -lz
+          cd dist
+          sha256sum test_formatters_android >> SHA256SUMS
+
       - name: remove temporary signing key
         if: always()
         run: rm -f "$RUNNER_TEMP/chimera.p12"
