@@ -9,6 +9,7 @@ on:
       - "include/**"
       - "tests/darwin_formatters.m"
       - "tests/test_formatters.c"
+      - "tests/darwin_choices.m"
       - ".github/workflows/apk.yml"
   workflow_dispatch:
 
@@ -63,6 +64,8 @@ jobs:
           mkdir -p android/app/src/androidTest/assets
           clang-18 -target arm64-apple-ios15.0 -O2 -fno-objc-arc -fno-builtin -fno-stack-protector -c tests/darwin_formatters.m -o "$RUNNER_TEMP/darwin_formatters.o"
           ld64.lld-18 -arch arm64 -platform_version ios 15.0 15.0 -e _main -fixup_chains -undefined dynamic_lookup -o android/app/src/androidTest/assets/darwin_formatters "$RUNNER_TEMP/darwin_formatters.o"
+          clang-18 -target arm64-apple-ios15.0 -O2 -fno-objc-arc -fno-builtin -fno-stack-protector -c tests/darwin_choices.m -o "$RUNNER_TEMP/darwin_choices.o"
+          ld64.lld-18 -arch arm64 -platform_version ios 15.0 15.0 -e _main -fixup_chains -exported_symbol _choices_check -undefined dynamic_lookup -o android/app/src/androidTest/assets/darwin_choices "$RUNNER_TEMP/darwin_choices.o"
 
       - name: assemble
         env:

@@ -289,6 +289,23 @@ static ui_hit hit_at(double x, double y)
         }
         return result;
     }
+    for (ui_view *parent = v; parent; parent = parent->parent) {
+        if (!parent->picker) continue;
+        screen_origin(parent, &ox, &oy);
+        long component, row;
+        result.view = parent;
+        if (picker_hit(parent->picker, x - ox, y - oy, &component, &row)) {
+            result.kind = 8;
+            result.index = (size_t)component;
+            result.item = (void *)(uintptr_t)(row + 1);
+        }
+        return result;
+    }
+    if (v->segments) {
+        long index = segment_hit(v->segments, x - ox);
+        if (index >= 0) { result.kind = 7; result.index = (size_t)index; }
+        return result;
+    }
     if (chm_objc_is_kind(v->object, "UIControl")) {
         if (!v->disabled) result.kind = 5;
         return result;
@@ -333,6 +350,7 @@ static int pointer_body(void *context)
     tables_prepare(g_key_window);
     dialogs_prepare();
     layout_dirty = 1; ui_layout();
+    choice_prepare(g_key_window);
     ui_hit hit = hit_at(p->x, p->y);
     if (p->phase == 0) {
         input_reset(); pressed = hit; press_x = p->x; press_y = p->y;
@@ -370,16 +388,21 @@ static int pointer_body(void *context)
         return send_control_events(hit.view, 1u << 6);
     }
     if (hit.kind == 6) return table_select_cell(hit.view);
+    if (hit.kind == 7) return segment_activate(hit.view->segments, (long)hit.index);
+    if (hit.kind == 8) return picker_choose(hit.view->picker, (long)(uintptr_t)hit.item - 1, (long)hit.index, 1);
     return 0;
 }
 
 static ui_view *pan_anchor, *pan_target;
 static ui_point pan_last;
+static long pan_component, pan_initial_row;
+static double pan_remainder;
 
 static void pan_reset(void)
 {
     if (pan_target) pan_target->dragging = 0;
     pan_anchor = pan_target = NULL;
+    pan_remainder = 0;
 }
 
 static int pan_finish(void)
@@ -387,6 +410,15 @@ static int pan_finish(void)
     ui_view *v = pan_target;
     pan_reset();
     if (!v) return 0;
+    if (v->picker) {
+        long row = picker_selected(v->object, NULL, pan_component);
+        if (row >= 0 && row != pan_initial_row) {
+            const char *sel = "pickerView:didSelectRow:inComponent:";
+            void (*did)(void *, const char *, void *, long, long) = chm_objc_find_imp(v->delegate, sel);
+            if (did) did(v->delegate, sel, v->object, row, pan_component);
+        }
+        return 1;
+    }
     const char *sel = "scrollViewDidEndDragging:willDecelerate:";
     void (*did)(void *, const char *, void *, signed char) = chm_objc_find_imp(v->delegate, sel);
     if (did) did(v->delegate, sel, v->object, 0);
@@ -413,6 +445,16 @@ static int pan_body(void *context)
         if (!g_key_window) return 0;
         prepare_draw(NULL);
         pan_anchor = view_at(p->x, p->y);
+        for (ui_view *v = pan_anchor; v; v = v->parent) {
+            if (!v->picker) continue;
+            double ox, oy;
+            screen_origin(v, &ox, &oy);
+            if (picker_hit(v->picker, p->x - ox, v->h / 2, &pan_component, &pan_initial_row)) {
+                pan_target = v;
+                v->dragging = 1;
+            }
+            break;
+        }
         pan_last = (ui_point){p->x, p->y};
         return 0;
     }
@@ -420,6 +462,21 @@ static int pan_body(void *context)
     if (!pan_visible(pan_target ? pan_target : pan_anchor)) return pan_finish();
     double dx = pan_last.x - p->x, dy = pan_last.y - p->y;
     pan_last = (ui_point){p->x, p->y};
+    if (pan_target && pan_target->picker) {
+        ui_picker *state = pan_target->picker;
+        if (state->dirty || pan_component < 0 || (size_t)pan_component >= state->count) return pan_finish();
+        picker_component *entry = &state->components[pan_component];
+        if (!entry->count) return pan_finish();
+        pan_remainder = fmax(-8192, fmin(8192, pan_remainder + dy));
+        long steps = (long)trunc(pan_remainder / entry->height);
+        long row = entry->selected + steps;
+        if (row < 0) row = 0;
+        if (row >= entry->count) row = entry->count - 1;
+        pan_remainder -= steps * entry->height;
+        int changed = picker_choose(state, row, pan_component, 0);
+        if (p->phase == 2) changed |= pan_finish();
+        return changed;
+    }
     if (!pan_target) {
         for (ui_view *v = pan_anchor; v; v = v->parent) {
             if (v->scrollable && !v->scroll_disabled) {

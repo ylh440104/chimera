@@ -222,6 +222,41 @@ static void table_clear(ui_table *t)
     free(t->row_counts); t->row_counts = NULL;
 }
 
+static int table_supplement(ui_table *table, long section, int footer)
+{
+    void *self = table->view->object, *delegate = table->view->delegate, *source = table->view->data_source;
+    const char *view_sel = footer ? "tableView:viewForFooterInSection:" : "tableView:viewForHeaderInSection:";
+    const char *title_sel = footer ? "tableView:titleForFooterInSection:" : "tableView:titleForHeaderInSection:";
+    const char *height_sel = footer ? "tableView:heightForFooterInSection:" : "tableView:heightForHeaderInSection:";
+    void *(*custom)(void *, const char *, void *, long) = chm_objc_find_imp(delegate, view_sel);
+    void *(*title_method)(void *, const char *, void *, long) = chm_objc_find_imp(source, title_sel);
+    double (*height_method)(void *, const char *, void *, long) = chm_objc_find_imp(delegate, height_sel);
+    void *object = custom ? custom(delegate, view_sel, self, section) : NULL;
+    int plain = 0;
+    if (!object) {
+        void *title = title_method ? title_method(source, title_sel, self, section) : NULL;
+        if (!title || !*chm_foundation_cstr(title)) return 1;
+        object = chm_foundation_alloc_obj("UILabel", 0);
+        l_set_text(object, "setText:", title);
+        ui_view *label = as_view(object);
+        if (!label) return 0;
+        label->font_size = 13; label->text_color = 0xffb3b3bdu;
+        plain = 1;
+    }
+    ui_view *view = as_view(object);
+    if (!view || view->parent) return 0;
+    double height = height_method ? height_method(delegate, height_sel, self, section) : 32;
+    if (height == 0) return 1;
+    if (!isfinite(height) || height < 0) height = 32;
+    ui_header *header = header_state(object);
+    if (header) { header->table = self; header->section = section; header->footer = footer; }
+    if (!table_append(table, view, NULL, height, plain ? 1 : 2)) return 0;
+    const char *will_sel = footer ? "tableView:willDisplayFooterView:forSection:" : "tableView:willDisplayHeaderView:forSection:";
+    void (*will)(void *, const char *, void *, void *, long) = chm_objc_find_imp(delegate, will_sel);
+    if (will) will(delegate, will_sel, self, object, section);
+    return 1;
+}
+
 static void table_reload(void *self, const char *sel)
 {
     (void)sel;
@@ -234,7 +269,6 @@ static void table_reload(void *self, const char *sel)
     long (*sections)(void *, const char *, void *) = chm_objc_find_imp(source, "numberOfSectionsInTableView:");
     long (*rows)(void *, const char *, void *, long) = chm_objc_find_imp(source, "tableView:numberOfRowsInSection:");
     void *(*cell)(void *, const char *, void *, void *) = chm_objc_find_imp(source, "tableView:cellForRowAtIndexPath:");
-    void *(*header)(void *, const char *, void *, long) = chm_objc_find_imp(source, "tableView:titleForHeaderInSection:");
     double (*row_height)(void *, const char *, void *, void *) = chm_objc_find_imp(delegate, "tableView:heightForRowAtIndexPath:");
     long n = source ? (sections ? sections(source, "numberOfSectionsInTableView:", self) : 1) : 0;
     if (n < 0 || n > 1024) goto failed;
@@ -246,14 +280,7 @@ static void table_reload(void *self, const char *sel)
         long count = rows ? rows(source, "tableView:numberOfRowsInSection:", self, section) : 0;
         if (count < 0 || count > 4096 || total + (size_t)count > 4096) goto failed;
         t->row_counts[section] = count; total += (size_t)count;
-        void *title = header ? header(source, "tableView:titleForHeaderInSection:", self, section) : NULL;
-        if (title && *chm_foundation_cstr(title)) {
-            ui_view *label = as_view(chm_foundation_alloc_obj("UILabel", 0));
-            if (!label) goto failed;
-            l_set_text(label->object, "setText:", title);
-            label->font_size = 13; label->text_color = 0xffb3b3bdu;
-            if (!table_append(t, label, NULL, 32, 1)) goto failed;
-        }
+        if (!table_supplement(t, section, 0)) goto failed;
         for (long row = 0; row < count; ++row) {
             void *index = index_new(chm_foundation_lookup_class("NSIndexPath"), NULL, row, section);
             if (!index || !cell) goto failed;
@@ -265,6 +292,7 @@ static void table_reload(void *self, const char *sel)
             c->table = t; c->index = index;
             if (!table_append(t, c->view, index, height, 0)) goto failed;
         }
+        if (!table_supplement(t, section, 1)) goto failed;
     }
     chm_session_log(g_sess, "ui: table sections=%ld rows=%zu source=%s", n, total,
                     source ? chm_objc_class_name(*(void **)source) : "nil");
@@ -288,10 +316,11 @@ static void table_update(ui_view *view)
     view->offset = scroll_limit(view, view->offset);
     for (size_t i = 0; i < t->count; ++i) {
         ui_row *row = &t->rows[i];
-        row->view->x = row->header ? 16 : 0;
+        row->view->x = row->header == 1 ? 16 : 0;
         row->view->y = row->top;
-        row->view->w = fmax(0, view->w - (row->header ? 32 : 0));
+        row->view->w = fmax(0, view->w - (row->header == 1 ? 32 : 0));
         row->view->h = row->height;
+        if (row->view->header) header_layout(row->view->header);
         if (row->view->cell && row->top + row->height > view->offset.y && row->top < view->offset.y + view->h)
             cell_layout(row->view->cell);
     }

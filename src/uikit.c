@@ -63,6 +63,9 @@ typedef struct ui_view {
     int switch_on;
     struct ui_table *table;
     struct ui_cell *cell;
+    struct ui_segments *segments;
+    struct ui_picker *picker;
+    struct ui_header *header;
     void *alert_action;
     char *placeholder;
     int secure, keyboard_type, capitalization;
@@ -191,6 +194,10 @@ static int layout_busy;
 static int layout_dirty = 1;
 static void ui_layout(void);
 static void table_update(ui_view *table);
+static void choice_layout(ui_view *view);
+static void choice_prepare(ui_view *view);
+static void choice_paint(chm_draw_fn draw, void *context, ui_view *view, const chm_draw_command *box, double alpha);
+static void choices_reset(void);
 static ui_item *items;
 static void *wc_view(void *self, const char *sel);
 static void container_sync(ui_vc *vc);
@@ -1502,6 +1509,7 @@ int chm_ui_view_count(void)
     return n;
 }
 
+#include "ui_choices.inc"
 #include "ui_widgets.inc"
 #include "ui_dialog.inc"
 #include "ui_input.inc"
@@ -1619,6 +1627,7 @@ void chm_ui_shutdown(chm_session *s)
     dialogs_shutdown();
     clock_reset();
     tables_shutdown();
+    choices_reset();
     symbols_reset();
     memset(view_index, 0, sizeof(view_index));
     while (views) {
@@ -1672,6 +1681,7 @@ void chm_ui_init(chm_session *s)
     chm_objc_register_host(s, split_methods, sizeof(split_methods) / sizeof(*split_methods));
     chm_objc_register_host(s, clock_methods, sizeof(clock_methods) / sizeof(*clock_methods));
     chm_objc_register_host(s, image_methods, sizeof(image_methods) / sizeof(*image_methods));
+    chm_objc_register_host(s, choice_methods, sizeof(choice_methods) / sizeof(*choice_methods));
     static const chm_host_method cell_image = {"UITableViewCell", "imageView", "@@:", cell_part, 0};
     chm_objc_register_host(s, &cell_image, 1);
     chm_scene_application_role = chm_foundation_string(CHM_APPLICATION_ROLE);

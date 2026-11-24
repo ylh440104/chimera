@@ -156,6 +156,7 @@ static void paint_view(chm_draw_fn draw, void *context, ui_view *v, double px, d
     if (chm_objc_is_kind(v->object, "UIActivityIndicatorView") && (v->animating || v->show_when_stopped)) text = "◌";
     emit_text(draw, context, &c, text, v->font_size, v->font_align, v->number_of_lines, paint_color(text_color, alpha));
     paint_bar(draw, context, v, &c, alpha);
+    choice_paint(draw, context, v, &c, alpha);
     if (v->clips) {
         left = fmax(left, c.x); top = fmax(top, c.y);
         right = fmin(right, c.x + v->w); bottom = fmin(bottom, c.y + v->h);
@@ -176,6 +177,7 @@ static int prepare_draw(void *context)
     dialogs_prepare();
     layout_dirty = 1;
     ui_layout();
+    choice_prepare(g_key_window);
     return 1;
 }
 
