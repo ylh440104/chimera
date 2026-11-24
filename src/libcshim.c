@@ -871,6 +871,8 @@ static char *safe_dirname(char *p)
 #define FN(n, f, k) { n, (void *)(f), k }
 
 static const chm_entry g_entries[] = {
+    FN("_objc_sync_enter", pt_objc_sync_enter, "objc.sync"),
+    FN("_objc_sync_exit", pt_objc_sync_exit, "objc.sync"),
     FN("_pthread_create", pt_create, "libc.pthread"),
     FN("_pthread_join", pt_join, "libc.pthread"),
     FN("_pthread_detach", pt_detach, "libc.pthread"),

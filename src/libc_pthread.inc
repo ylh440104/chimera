@@ -40,6 +40,12 @@ static pthread_mutex_t pt_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t pt_changed = PTHREAD_COND_INITIALIZER;
 static pt_thread *pt_threads;
 static pt_mutex *pt_mutexes;
+typedef struct pt_sync_object {
+    void *object;
+    uint64_t mutex[8];
+    struct pt_sync_object *next;
+} pt_sync_object;
+static pt_sync_object *pt_sync_objects;
 static atomic_int pt_stopping;
 static atomic_ulong pt_epoch;
 static _Thread_local unsigned long pt_local_epoch;
@@ -479,6 +485,29 @@ static int pt_mutex_unlock(void *object)
     return result;
 }
 
+static int pt_objc_sync(void *object, int enter)
+{
+    if (!object) return 0;
+    pthread_mutex_lock(&pt_lock);
+    pt_sync_object *entry = pt_sync_objects;
+    while (entry && entry->object != object) entry = entry->next;
+    if (!entry && enter) {
+        entry = calloc(1, sizeof(*entry));
+        if (entry) {
+            entry->object = object;
+            entry->mutex[0] = 0x32AAABA2;
+            entry->next = pt_sync_objects;
+            pt_sync_objects = entry;
+        }
+    }
+    pthread_mutex_unlock(&pt_lock);
+    if (!entry) return enter ? -3 : -1;
+    int result = enter ? pt_mutex_lock(entry->mutex) : pt_mutex_unlock(entry->mutex);
+    return result ? (enter ? -2 : -1) : 0;
+}
+static int pt_objc_sync_enter(void *object) { return pt_objc_sync(object, 1); }
+static int pt_objc_sync_exit(void *object) { return pt_objc_sync(object, 0); }
+
 void chm_pthread_stop(void)
 {
     pthread_mutex_lock(&pt_lock);
@@ -504,6 +533,11 @@ void chm_pthread_reset(void)
         pt_mutex *next = pt_mutexes->next;
         free(pt_mutexes);
         pt_mutexes = next;
+    }
+    while (pt_sync_objects) {
+        pt_sync_object *next = pt_sync_objects->next;
+        free(pt_sync_objects);
+        pt_sync_objects = next;
     }
     atomic_fetch_add(&pt_epoch, 1);
     pthread_mutex_unlock(&pt_lock);

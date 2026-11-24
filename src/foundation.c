@@ -167,6 +167,11 @@ static const struct {
     { "NSJSONSerialization", "NSObject", 16 },
     { "NSNull", "NSObject", 16 },
     { "NSIndexPath", "NSObject", 32 },
+    { "NSIndexSet", "NSObject", 32 },
+    { "NSMutableIndexSet", "NSIndexSet", 32 },
+    { "NSUUID", "NSObject", 32 },
+    { "NSLock", "NSObject", 80 },
+    { "NSRecursiveLock", "NSLock", 80 },
     { "NSPredicate", "NSObject", 32 },
     { "NSProgress", "NSObject", 32 },
     { "NSLocale", "NSObject", 32 },
@@ -2225,6 +2230,7 @@ static void *bundle_id(void *self, const char *sel)
 #include "foundation_progress.inc"
 #include "foundation_download.inc"
 #include "corefoundation.inc"
+#include "foundation_values.inc"
 
 static const struct {
     const char *sel;
@@ -2429,6 +2435,7 @@ void chm_foundation_init(chm_session *s)
         c->cls.superclass = &c->parent->cls;
         c->meta.superclass = &c->parent->meta;
     }
+    chm_objc_register_host(s, value_methods, sizeof(value_methods) / sizeof(*value_methods));
     chm_objc_register_host(s, file_value_methods, sizeof(file_value_methods) / sizeof(*file_value_methods));
     chm_objc_register_host(s, filter_methods, sizeof(filter_methods) / sizeof(*filter_methods));
     chm_objc_register_host(s, progress_methods, sizeof(progress_methods) / sizeof(*progress_methods));
@@ -2453,6 +2460,7 @@ void chm_foundation_shutdown(void)
     int i;
     cf_owned_reset();
     chm_graphics_reset(g_session);
+    values_reset();
     services_shutdown();
     progress_reset();
     constants_reset();
