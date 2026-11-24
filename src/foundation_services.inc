@@ -74,40 +74,8 @@ static int file_symlink(void *self, const char *sel, void *path, void *target, v
     return 0;
 }
 
-typedef struct output_stream { void *object; int fd, status, append; char path[2048]; struct output_stream *next; } output_stream;
-static output_stream *streams;
-static output_stream *stream_find(void *object) { for (output_stream *s = streams; s; s = s->next) if (s->object == object) return s; return NULL; }
-static void *stream_init(void *self, const char *sel, void *path, signed char append)
-{
-    (void)sel;
-    output_stream *s = calloc(1, sizeof(*s));
-    if (!s) return NULL;
-    if (!chm_foundation_map_path_write(fo_bytes(path), s->path, sizeof(s->path))) { free(s); return NULL; }
-    s->object = self; s->append = append; s->fd = -1; s->next = streams; streams = s; return self;
-}
-static void stream_open(void *self, const char *sel)
-{
-    (void)sel; output_stream *s = stream_find(self);
-    if (!s || s->status) return;
-    s->fd = open(s->path, O_WRONLY | O_CREAT | (s->append ? O_APPEND : O_TRUNC), 0600);
-    s->status = s->fd >= 0 ? 2 : 7;
-}
-static void stream_close(void *self, const char *sel)
-{
-    (void)sel; output_stream *s = stream_find(self);
-    if (!s) return;
-    if (s->fd >= 0) close(s->fd);
-    s->fd = -1; s->status = 6;
-}
-static long stream_status(void *self, const char *sel) { (void)sel; output_stream *s = stream_find(self); return s ? s->status : 0; }
-static long stream_write(void *self, const char *sel, const void *bytes, unsigned long length)
-{
-    (void)sel; output_stream *s = stream_find(self);
-    if (!s || s->status != 2 || (!bytes && length)) return -1;
-    ssize_t n; do { n = write(s->fd, bytes, length); } while (n < 0 && errno == EINTR);
-    if (n < 0) s->status = 7;
-    return n;
-}
+#include "foundation_streams.inc"
+#include "foundation_xml.inc"
 static long json_write_stream(void *cls, const char *sel, void *object, void *stream, unsigned long options, void **error)
 {
     fo_data *data = json_write(cls, sel, object, options, error);
@@ -265,7 +233,8 @@ static void services_shutdown(void)
     network_shutdown();
     constant_strings_reset();
     bundles_reset();
-    while (streams) { output_stream *next = streams->next; if (streams->fd >= 0) close(streams->fd); free(streams); streams = next; }
+    streams_reset();
+    xml_reset();
     while (observers) { observer *next = observers->next; free(observers->selector); free(observers); observers = next; }
     while (notifications) { notification *next = notifications->next; free(notifications); notifications = next; }
     observer_serial = 0; g_bundle_root[0] = 0;

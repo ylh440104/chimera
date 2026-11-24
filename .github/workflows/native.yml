@@ -59,7 +59,7 @@ jobs:
           for tool in chmdump chmdemand chimera_run; do
             cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -pthread -Iinclude -Ithird_party/yxml -o "$tool" "tools/$tool.c" $SRC -lm -ldl -lz
           done
-          for test in test_input test_table test_services test_startup test_transfer test_split test_sync test_libc_compat test_pthread probe_version; do
+          for test in test_input test_table test_services test_startup test_transfer test_split test_sync test_libc_compat test_pthread test_streams probe_version; do
             cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -pthread -Iinclude -Ithird_party/yxml -o "$test" "tests/$test.c" $SRC -lm -ldl -lz
           done
           ./chmdump tests/fixture.ios > dump.txt
@@ -168,6 +168,14 @@ jobs:
           grep -Fx 'entry returned 0' abi-results/plist.log
           python3 tests/check_plist.py verify "$PWD/abi-results/plist-root/mobile" | tee -a abi-results/plist.log
 
+      - name: Foundation streams and XML regression
+        run: |
+          clang-18 -target arm64-apple-ios15.0 -O2 -fno-objc-arc -fno-builtin -fno-stack-protector -c tests/darwin_streams.m -o abi-results/darwin_streams.o
+          ld64.lld-18 -arch arm64 -platform_version ios 15.0 15.0 -e _main -fixup_chains -exported_symbol _streams_check -undefined dynamic_lookup -o abi-results/darwin_streams abi-results/darwin_streams.o
+          mkdir -p abi-results/streams-root/mobile
+          CHM_SANDBOX_ROOT="$PWD/abi-results/streams-root" timeout 30 ./test_streams "$PWD/abi-results/darwin_streams" > abi-results/streams.log 2>&1 || { cat abi-results/streams.log; exit 1; }
+          cat abi-results/streams.log
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -210,6 +218,8 @@ jobs:
             abi-results/graphics.log
             abi-results/darwin_values
             abi-results/values.log
+            abi-results/darwin_streams
+            abi-results/streams.log
             abi-results/darwin_plist
             abi-results/plist.log
             abi-results/plist-root/mobile/*.plist
@@ -238,5 +248,6 @@ jobs:
             test_sync
             test_libc_compat
             test_pthread
+            test_streams
             probe_version
           if-no-files-found: error

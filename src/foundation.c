@@ -160,7 +160,10 @@ static const struct {
     { "NSFileManager", "NSObject", 32 },
     { "NSFileHandle", "NSObject", 64 },
     { "NSPipe", "NSObject", 64 },
-    { "NSOutputStream", "NSObject", 32 },
+    { "NSStream", "NSObject", 32 },
+    { "NSInputStream", "NSStream", 32 },
+    { "NSOutputStream", "NSStream", 32 },
+    { "NSXMLParser", "NSObject", 32 },
     { "NSUserDefaults", "NSObject", 32 },
     { "NSNotificationCenter", "NSObject", 32 },
     { "NSNotification", "NSObject", 32 },
@@ -2439,6 +2442,8 @@ void chm_foundation_init(chm_session *s)
         c->cls.superclass = &c->parent->cls;
         c->meta.superclass = &c->parent->meta;
     }
+    chm_objc_register_host(s, stream_methods, sizeof(stream_methods) / sizeof(*stream_methods));
+    chm_objc_register_host(s, xml_methods, sizeof(xml_methods) / sizeof(*xml_methods));
     chm_objc_register_host(s, plist_methods, sizeof(plist_methods) / sizeof(*plist_methods));
     chm_objc_register_host(s, value_methods, sizeof(value_methods) / sizeof(*value_methods));
     chm_objc_register_host(s, file_value_methods, sizeof(file_value_methods) / sizeof(*file_value_methods));
