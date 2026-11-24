@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <math.h>
 
 static uint64_t g_task_self;
 static uint64_t g_stack_guard;
@@ -92,6 +93,52 @@ static void CGImageRelease_impl(void *img)
 
 typedef struct { double x, y, w, h; } cg_rect;
 typedef struct { double x, y; } cg_point;
+typedef struct { double a, b, c, d, tx, ty; } cg_transform;
+
+_Static_assert(sizeof(cg_rect) == 32 && sizeof(cg_point) == 16 && sizeof(cg_transform) == 48,
+               "64-bit CoreGraphics geometry required");
+
+static const cg_point g_point_zero;
+static const cg_rect g_rect_null = {INFINITY, INFINITY, 0, 0};
+static const cg_transform g_transform_identity = {1, 0, 0, 1, 0, 0};
+
+static int cg_rect_is_null(cg_rect r)
+{
+    return r.x == INFINITY || r.y == INFINITY;
+}
+
+static double CGRectGetWidth_impl(cg_rect r)
+{
+    return fabs(r.w);
+}
+
+static double CGRectGetHeight_impl(cg_rect r)
+{
+    return fabs(r.h);
+}
+
+static cg_rect CGRectOffset_impl(cg_rect r, double dx, double dy)
+{
+    if (cg_rect_is_null(r)) return g_rect_null;
+    r.x += dx;
+    r.y += dy;
+    return r;
+}
+
+static _Bool CGRectEqualToRect_impl(cg_rect a, cg_rect b)
+{
+    if (cg_rect_is_null(a) && cg_rect_is_null(b)) return 1;
+    return a.x == b.x && a.y == b.y && a.w == b.w && a.h == b.h;
+}
+
+static cg_transform CGAffineTransformScale_impl(cg_transform t, double sx, double sy)
+{
+    t.a *= sx;
+    t.b *= sx;
+    t.c *= sy;
+    t.d *= sy;
+    return t;
+}
 
 static int CGRectContainsPoint_impl(cg_rect r, cg_point p)
 {
@@ -467,6 +514,11 @@ static const fw_entry g_fw[] = {
     { "_CGRectContainsPoint", (void *)CGRectContainsPoint_impl },
     { "_CGRectGetMaxX", (void *)CGRectGetMaxX_impl },
     { "_CGRectGetMaxY", (void *)CGRectGetMaxY_impl },
+    { "_CGRectGetWidth", (void *)CGRectGetWidth_impl },
+    { "_CGRectGetHeight", (void *)CGRectGetHeight_impl },
+    { "_CGRectOffset", (void *)CGRectOffset_impl },
+    { "_CGRectEqualToRect", (void *)CGRectEqualToRect_impl },
+    { "_CGAffineTransformScale", (void *)CGAffineTransformScale_impl },
     { "_CGRectZero", (void *)g_rect_zero },
     { "_SecItemAdd", (void *)SecItemAdd_impl },
     { "_SecItemCopyMatching", (void *)SecItemCopyMatching_impl },
@@ -516,6 +568,9 @@ static const fw_entry g_fw[] = {
 };
 
 static const fw_entry g_data[] = {
+    { "_CGPointZero", (void *)&g_point_zero },
+    { "_CGRectNull", (void *)&g_rect_null },
+    { "_CGAffineTransformIdentity", (void *)&g_transform_identity },
     { "_mach_task_self_", &g_task_self },
     { "___stack_chk_guard", &g_stack_guard },
     { "___stdoutp", &g_stdout_obj },

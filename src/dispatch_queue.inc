@@ -1,6 +1,7 @@
 #include <pthread.h>
 #include <stdatomic.h>
 #include <time.h>
+#include <limits.h>
 
 typedef struct { int done; } queue_waiter;
 typedef struct {
@@ -10,17 +11,27 @@ typedef struct {
     uint64_t when;
     void *group;
     queue_waiter *waiter;
+    void *completion_group;
+    uint64_t group_generation;
+    int group_pending, barrier;
 } queue_job;
 typedef struct queue_object {
     queue_job jobs[1024];
     size_t count, active;
-    int concurrent;
+    int concurrent, barrier_active;
     struct queue_object *next;
 } queue_object;
-typedef struct queue_group { long count; struct queue_group *next; } queue_group;
+typedef struct queue_group { long count; uint64_t generation; struct queue_group *next; } queue_group;
+typedef struct semaphore_waiter { int signaled; struct semaphore_waiter *next; } semaphore_waiter;
+typedef struct queue_semaphore {
+    long value;
+    semaphore_waiter *first, *last;
+    struct queue_semaphore *next;
+} queue_semaphore;
 
 static queue_object main_queue, global_queue = {.concurrent = 1}, *extra_queues;
 static queue_group *queue_groups;
+static queue_semaphore *queue_semaphores;
 static char concurrent_attribute;
 static pthread_mutex_t queue_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t queue_changed = PTHREAD_COND_INITIALIZER;
@@ -51,17 +62,25 @@ static queue_group *group_find(void *object)
     for (queue_group *g = queue_groups; g; g = g->next) if (g == object) return g;
     return NULL;
 }
+static void group_complete_locked(queue_group *g)
+{
+    if (g && g->count > 0 && --g->count == 0) g->generation++;
+}
+
 static int queue_take(queue_object *q, queue_job *job)
 {
-    if (!q->concurrent && q->active) return 0;
+    if (q->barrier_active || (!q->concurrent && q->active)) return 0;
     uint64_t now = queue_clock();
     for (size_t i = 0; i < q->count; i++) {
-        queue_group *g = group_find(q->jobs[i].group);
-        if (q->jobs[i].when > now || (g && g->count)) continue;
-        *job = q->jobs[i];
+        queue_job *candidate = &q->jobs[i];
+        queue_group *g = group_find(candidate->group);
+        if (candidate->when > now || (g && candidate->group_pending && g->generation == candidate->group_generation)) continue;
+        if (candidate->barrier && q->active) return 0;
+        *job = *candidate;
         q->count--;
         memmove(q->jobs + i, q->jobs + i + 1, (q->count - i) * sizeof(*q->jobs));
         q->active++;
+        q->barrier_active = job->barrier;
         return 1;
     }
     return 0;
@@ -98,6 +117,8 @@ static void finish_job(queue_object *q, queue_job *job, int rc, int background)
         queue_session->exit_code = -2;
     pthread_mutex_lock(&queue_lock);
     q->active--;
+    if (job->barrier) q->barrier_active = 0;
+    group_complete_locked(group_find(job->completion_group));
     if (job->waiter) job->waiter->done = 1;
     if (background) worker_completed++;
     pthread_cond_broadcast(&queue_changed);
@@ -139,7 +160,8 @@ static void start_workers(void)
     }
     pthread_mutex_unlock(&queue_lock);
 }
-static int queue_put(void *queue, void *block, void (*function)(void *), void *context, uint64_t when, void *group, queue_waiter *waiter)
+static int queue_put_options(void *queue, void *block, void (*function)(void *), void *context,
+                             uint64_t when, void *group, queue_waiter *waiter, void *completion_group, int barrier)
 {
     if ((!block && !function) || chm_dispatch_stopping()) return -1;
     chm_guest_lock();
@@ -147,14 +169,31 @@ static int queue_put(void *queue, void *block, void (*function)(void *), void *c
     if (block && !copy) { chm_guest_unlock(); return -1; }
     pthread_mutex_lock(&queue_lock);
     queue_object *q = queue_for(queue);
-    int ok = q && q->count < 1024 && !chm_dispatch_stopping();
-    if (ok) q->jobs[q->count++] = (queue_job){copy, function, context, when, group, waiter};
+    queue_group *notify = group_find(group), *complete = group_find(completion_group);
+    int ok = q && q->count < 1024 && !chm_dispatch_stopping() &&
+             (!group || notify) && (!completion_group || (complete && complete->count < LONG_MAX));
+    if (ok) {
+        if (complete) complete->count++;
+        q->jobs[q->count++] = (queue_job){
+            .block = copy, .function = function, .context = context, .when = when,
+            .group = group, .waiter = waiter, .completion_group = completion_group,
+            .group_generation = notify ? notify->generation : 0,
+            .group_pending = notify && notify->count > 0,
+            .barrier = barrier && q != &global_queue
+        };
+    }
     pthread_cond_broadcast(&queue_changed);
     pthread_mutex_unlock(&queue_lock);
     if (!ok) chm_block_release(copy);
     if (ok && q != &main_queue) start_workers();
     chm_guest_unlock();
     return ok ? 0 : -1;
+}
+
+static int queue_put(void *queue, void *block, void (*function)(void *), void *context,
+                     uint64_t when, void *group, queue_waiter *waiter)
+{
+    return queue_put_options(queue, block, function, context, when, group, waiter, NULL, 0);
 }
 void chm_dispatch_init(void) {}
 void chm_dispatch_set_session(chm_session *session)
@@ -181,12 +220,14 @@ void chm_dispatch_reset(void)
     for (queue_object *q = &main_queue; q;) {
         for (size_t i = 0; i < q->count; i++) chm_block_release(q->jobs[i].block);
         q->count = q->active = 0;
+        q->barrier_active = 0;
         if (q == &main_queue) q = &global_queue;
         else if (q == &global_queue) q = extra_queues;
         else { queue_object *next = q->next; free(q); q = next; }
     }
     extra_queues = NULL;
     while (queue_groups) { queue_group *next = queue_groups->next; free(queue_groups); queue_groups = next; }
+    while (queue_semaphores) { queue_semaphore *next = queue_semaphores->next; free(queue_semaphores); queue_semaphores = next; }
     queue_session = NULL; worker_count = worker_completed = 0;
     chm_guest_unlock();
 }
@@ -197,7 +238,7 @@ static void queue_after_f(uint64_t when, void *q, void *context, void (*function
 static void queue_sync_common(void *q, void *b, void *context, void (*function)(void *))
 {
     if ((!worker_thread && q == &main_queue) || q == current_queue) {
-        queue_job job = {b, function, context, 0, NULL, NULL};
+        queue_job job = {.block = b, .function = function, .context = context};
         invoke_job(&job);
         return;
     }
@@ -235,7 +276,7 @@ static uint64_t queue_time(uint64_t when, int64_t delta)
 static void queue_once(long *predicate, void *block)
 {
     if (predicate && !*predicate) {
-        *predicate = 1; queue_job job = {block, NULL, NULL, 0, NULL, NULL}; invoke_job(&job); *predicate = -1;
+        *predicate = 1; queue_job job = {.block = block}; invoke_job(&job); *predicate = -1;
     }
 }
 static void queue_once_f(long *predicate, void *context, void (*function)(void *))
@@ -250,11 +291,12 @@ static void *group_create(void)
 }
 static void group_enter(void *object)
 {
-    pthread_mutex_lock(&queue_lock); queue_group *g = group_find(object); if (g) g->count++; pthread_mutex_unlock(&queue_lock);
+    pthread_mutex_lock(&queue_lock); queue_group *g = group_find(object); if (g && g->count < LONG_MAX) g->count++; pthread_mutex_unlock(&queue_lock);
 }
 static void group_leave(void *object)
 {
-    pthread_mutex_lock(&queue_lock); queue_group *g = group_find(object); if (g && g->count > 0) g->count--;
+    pthread_mutex_lock(&queue_lock);
+    group_complete_locked(group_find(object));
     pthread_cond_broadcast(&queue_changed); pthread_mutex_unlock(&queue_lock);
 }
 static void group_notify(void *g, void *q, void *b) { queue_put(q, b, NULL, NULL, 0, g, NULL); }
@@ -289,12 +331,15 @@ static long group_wait(void *object, uint64_t when)
     unsigned depth = chm_guest_suspend();
     pthread_mutex_lock(&queue_lock);
     queue_group *g = group_find(object);
-    while (g && g->count && when && queue_clock() < when && !chm_dispatch_stopping()) queue_wait_tick();
-    long result = !g ? -1 : g->count ? 1 : 0;
+    uint64_t generation = g ? g->generation : 0;
+    while (g && g->count && g->generation == generation && when && queue_clock() < when && !chm_dispatch_stopping()) queue_wait_tick();
+    long result = !g ? -1 : g->generation != generation || !g->count ? 0 : 1;
     pthread_mutex_unlock(&queue_lock);
     chm_guest_resume(depth);
     return result;
 }
+#include "dispatch_sync.inc"
+
 size_t chm_dispatch_pending(void)
 {
     pthread_mutex_lock(&queue_lock);
@@ -312,6 +357,11 @@ void *chm_dispatch_lookup(const char *name)
         {"_dispatch_once", queue_once}, {"_dispatch_once_f", queue_once_f},
         {"_dispatch_get_main_queue", queue_main}, {"_dispatch_get_global_queue", queue_global},
         {"_dispatch_queue_create", queue_create}, {"_dispatch_time", queue_time},
+        {"_dispatch_barrier_async", queue_barrier_async}, {"_dispatch_barrier_async_f", queue_barrier_async_f},
+        {"_dispatch_barrier_sync", queue_barrier_sync}, {"_dispatch_barrier_sync_f", queue_barrier_sync_f},
+        {"_dispatch_group_async", group_async}, {"_dispatch_group_async_f", group_async_f},
+        {"_dispatch_semaphore_create", semaphore_create}, {"_dispatch_semaphore_signal", semaphore_signal},
+        {"_dispatch_semaphore_wait", semaphore_wait},
         {"_dispatch_group_create", group_create}, {"_dispatch_group_enter", group_enter},
         {"_dispatch_group_leave", group_leave}, {"_dispatch_group_notify", group_notify},
         {"_dispatch_group_wait", group_wait}, {"__dispatch_main_q", &main_queue},
