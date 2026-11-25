@@ -59,7 +59,7 @@ jobs:
           for tool in chmdump chmdemand chimera_run; do
             cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -pthread -Iinclude -Ithird_party/yxml -o "$tool" "tools/$tool.c" $SRC -lm -ldl -lz
           done
-          for test in test_input test_table test_services test_startup test_transfer test_split test_sync test_libc_compat test_pthread test_streams test_formatters test_choices test_strings probe_version; do
+          for test in test_input test_table test_services test_startup test_transfer test_split test_sync test_libc_compat test_pthread test_streams test_formatters test_choices test_strings test_uttype probe_version; do
             cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -pthread -Iinclude -Ithird_party/yxml -o "$test" "tests/$test.c" $SRC -lm -ldl -lz
           done
           ./chmdump tests/fixture.ios > dump.txt
@@ -184,6 +184,14 @@ jobs:
           CHM_SANDBOX_ROOT="$PWD/abi-results/streams-root" timeout 30 ./test_streams "$PWD/abi-results/darwin_streams" > abi-results/streams.log 2>&1 || { cat abi-results/streams.log; exit 1; }
           cat abi-results/streams.log
 
+      - name: UTType tag lookup regression
+        run: |
+          clang-18 -target arm64-apple-ios15.0 -O2 -fno-objc-arc -fno-builtin -fno-stack-protector -c tests/darwin_uttype.m -o abi-results/darwin_uttype.o
+          ld64.lld-18 -arch arm64 -platform_version ios 15.0 15.0 -e _main -fixup_chains -undefined dynamic_lookup -o abi-results/darwin_uttype abi-results/darwin_uttype.o
+          mkdir -p abi-results/uttype-root
+          CHM_SANDBOX_ROOT="$PWD/abi-results/uttype-root" timeout 30 ./test_uttype "$PWD/abi-results/darwin_uttype" "$PWD/tests/uttype-reference.jsonl" > abi-results/uttype.log 2>&1 || { cat abi-results/uttype.log; exit 1; }
+          cat abi-results/uttype.log
+
       - name: CoreFoundation string transform regression
         run: |
           clang-18 -target arm64-apple-ios15.0 -O2 -fno-objc-arc -fno-builtin -fno-stack-protector -c tests/darwin_strings.m -o abi-results/darwin_strings.o
@@ -250,6 +258,8 @@ jobs:
             abi-results/formatters.log
             abi-results/darwin_strings
             abi-results/strings.log
+            abi-results/darwin_uttype
+            abi-results/uttype.log
             abi-results/darwin_plist
             abi-results/plist.log
             abi-results/plist-root/mobile/*.plist
@@ -282,5 +292,6 @@ jobs:
             test_formatters
             test_choices
             test_strings
+            test_uttype
             probe_version
           if-no-files-found: error

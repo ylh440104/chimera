@@ -253,10 +253,13 @@ static void *cf_bundle_main(void) { return singleton("__main_bundle", "NSBundle"
 static void *cf_bundle_identifier(void *identifier) { return bundle_by_identifier(NULL, NULL, identifier); }
 
 #include "corefoundation_strings.inc"
+#include "corefoundation_uttype.inc"
 
 void *chm_foundation_cf_lookup(const char *symbol)
 {
     static const struct { const char *name; void *function; } entries[] = {
+        {"_UTTypeCreatePreferredIdentifierForTag", ut_create_identifier},
+        {"_UTTypeCopyPreferredTagWithClass", ut_copy_tag},
         {"_CFStringCreateMutableCopy", cf_string_copy},
         {"_CFStringCreateCopy", cf_string_immutable_copy},
         {"_CFStringGetLength", cf_string_length},

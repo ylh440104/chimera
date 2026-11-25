@@ -40,7 +40,7 @@ jobs:
           assert png['result']['identifier'] == 'public.png'
           assert png['result']['mime'] == 'image/png'
           unknown = next(row for row in tags if row['tag'] == 'chm-unknown-extension-9f7c' and row['constraint'] is None)
-          assert unknown['result']['dynamic'] is True
+          assert unknown['result']['dynamic'] == 1
           assert unknown['result']['extension'] == 'chm-unknown-extension-9f7c'
           print('Recorded Apple reference cases:', len(rows))
           print('Unknown extension:', unknown['result']['identifier'])
