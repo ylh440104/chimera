@@ -136,6 +136,8 @@ void *chm_dispatch_lookup(const char *name);
 int chm_ui_vsync(double timestamp, double period);
 size_t chm_dispatch_pump(chm_session *s);
 size_t chm_dispatch_pending(void);
+int chm_dispatch_submit(void *queue, void *context, void (*function)(void *));
+size_t chm_reachability_pump(chm_session *session);
 
 void chm_foundation_init(chm_session *s);
 void chm_foundation_shutdown(void);

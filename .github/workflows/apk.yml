@@ -13,6 +13,7 @@ on:
       - "tests/darwin_strings.m"
       - "tests/darwin_uttype.m"
       - ".github/workflows/apk.yml"
+      - "tests/darwin_reachability.m"
   workflow_dispatch:
 
 permissions:
@@ -73,6 +74,9 @@ jobs:
 
           clang-18 -target arm64-apple-ios15.0 -O2 -fno-objc-arc -fno-builtin -fno-stack-protector -c tests/darwin_uttype.m -o "$RUNNER_TEMP/darwin_uttype.o"
           ld64.lld-18 -arch arm64 -platform_version ios 15.0 15.0 -e _main -fixup_chains -undefined dynamic_lookup -o android/app/src/androidTest/assets/darwin_uttype "$RUNNER_TEMP/darwin_uttype.o"
+
+          clang-18 -target arm64-apple-ios15.0 -O2 -fno-objc-arc -fno-builtin -fno-stack-protector -c tests/darwin_reachability.m -o "$RUNNER_TEMP/darwin_reachability.o"
+          ld64.lld-18 -arch arm64 -platform_version ios 15.0 15.0 -e _main -fixup_chains -exported_symbol _reachability_check -undefined dynamic_lookup -o android/app/src/androidTest/assets/darwin_reachability "$RUNNER_TEMP/darwin_reachability.o"
 
       - uses: actions/cache@v4
         with:

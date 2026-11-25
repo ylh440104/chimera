@@ -195,6 +195,10 @@ static int queue_put(void *queue, void *block, void (*function)(void *), void *c
 {
     return queue_put_options(queue, block, function, context, when, group, waiter, NULL, 0);
 }
+int chm_dispatch_submit(void *queue, void *context, void (*function)(void *))
+{
+    return queue_put(queue, NULL, function, context, 0, NULL, NULL);
+}
 void chm_dispatch_init(void) {}
 void chm_dispatch_set_session(chm_session *session)
 {
@@ -308,7 +312,10 @@ size_t chm_dispatch_pump(chm_session *session)
 {
     if (session && session != queue_session) return 0;
     start_workers();
-    size_t runs = 0;
+    queue_object *previous_queue = current_queue;
+    current_queue = &main_queue;
+    size_t runs = chm_reachability_pump(queue_session);
+    current_queue = previous_queue;
     uint64_t deadline = queue_clock() + 8000000;
     while (!chm_dispatch_stopping() && runs < 64 && queue_clock() < deadline) {
         queue_job job;

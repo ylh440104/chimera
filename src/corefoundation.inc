@@ -10,6 +10,7 @@ typedef struct cf_owned {
     void *object, *allocator;
     size_t references;
     long string_maximum;
+    void (*destroy)(void *);
     cf_array_callbacks callbacks;
     struct cf_owned *next;
 } cf_owned;
@@ -49,7 +50,8 @@ static void cf_owned_release(void *object)
     cf_owned **link = &cf_objects;
     while (*link != entry) link = &(*link)->next;
     *link = entry->next;
-    if (fo_is_array(object)) {
+    if (entry->destroy) entry->destroy(object);
+    else if (fo_is_array(object)) {
         fo_array *array = object;
         if (entry->callbacks.release)
             for (int64_t i = 0; i < array->count; i++) entry->callbacks.release(entry->allocator, array->items[i]);
@@ -254,10 +256,17 @@ static void *cf_bundle_identifier(void *identifier) { return bundle_by_identifie
 
 #include "corefoundation_strings.inc"
 #include "corefoundation_uttype.inc"
+#include "corefoundation_reachability.inc"
 
 void *chm_foundation_cf_lookup(const char *symbol)
 {
     static const struct { const char *name; void *function; } entries[] = {
+        {"_SCNetworkReachabilityCreateWithAddress", sc_create_address},
+        {"_SCNetworkReachabilityCreateWithName", sc_create_name},
+        {"_SCNetworkReachabilityGetFlags", sc_get_flags},
+        {"_SCNetworkReachabilitySetCallback", sc_set_callback},
+        {"_SCNetworkReachabilityScheduleWithRunLoop", sc_schedule},
+        {"_SCNetworkReachabilityUnscheduleFromRunLoop", sc_unschedule},
         {"_UTTypeCreatePreferredIdentifierForTag", ut_create_identifier},
         {"_UTTypeCopyPreferredTagWithClass", ut_copy_tag},
         {"_CFStringCreateMutableCopy", cf_string_copy},

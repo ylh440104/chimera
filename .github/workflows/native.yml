@@ -59,7 +59,7 @@ jobs:
           for tool in chmdump chmdemand chimera_run; do
             cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -pthread -Iinclude -Ithird_party/yxml -o "$tool" "tools/$tool.c" $SRC -lm -ldl -lz
           done
-          for test in test_input test_table test_services test_startup test_transfer test_split test_sync test_libc_compat test_pthread test_streams test_formatters test_choices test_strings test_uttype probe_version; do
+          for test in test_input test_table test_services test_startup test_transfer test_split test_sync test_libc_compat test_pthread test_streams test_formatters test_choices test_strings test_uttype test_reachability probe_version; do
             cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -pthread -Iinclude -Ithird_party/yxml -o "$test" "tests/$test.c" $SRC -lm -ldl -lz
           done
           ./chmdump tests/fixture.ios > dump.txt
@@ -184,6 +184,16 @@ jobs:
           CHM_SANDBOX_ROOT="$PWD/abi-results/streams-root" timeout 30 ./test_streams "$PWD/abi-results/darwin_streams" > abi-results/streams.log 2>&1 || { cat abi-results/streams.log; exit 1; }
           cat abi-results/streams.log
 
+      - name: Network reachability regression
+        run: |
+          clang-18 -target arm64-apple-ios15.0 -O2 -fno-objc-arc -fno-builtin -fno-stack-protector -c tests/darwin_reachability.m -o abi-results/darwin_reachability.o
+          ld64.lld-18 -arch arm64 -platform_version ios 15.0 15.0 -e _main -fixup_chains -exported_symbol _reachability_check -undefined dynamic_lookup -o abi-results/darwin_reachability abi-results/darwin_reachability.o
+          mkdir -p abi-results/reachability-root
+          CHM_SANDBOX_ROOT="$PWD/abi-results/reachability-root" timeout 30 ./test_reachability "$PWD/abi-results/darwin_reachability" > abi-results/reachability.log 2>&1 || { cat abi-results/reachability.log; exit 1; }
+          sudo unshare --net sh -c 'ip link set lo up && CHM_SANDBOX_ROOT="$PWD/abi-results/reachability-netns" timeout 30 ./test_reachability "$PWD/abi-results/darwin_reachability" --netns' > abi-results/reachability-netns.log 2>&1 || { cat abi-results/reachability-netns.log; exit 1; }
+          cat abi-results/reachability.log
+          cat abi-results/reachability-netns.log
+
       - name: UTType tag lookup regression
         run: |
           clang-18 -target arm64-apple-ios15.0 -O2 -fno-objc-arc -fno-builtin -fno-stack-protector -c tests/darwin_uttype.m -o abi-results/darwin_uttype.o
@@ -260,6 +270,9 @@ jobs:
             abi-results/strings.log
             abi-results/darwin_uttype
             abi-results/uttype.log
+            abi-results/darwin_reachability
+            abi-results/reachability.log
+            abi-results/reachability-netns.log
             abi-results/darwin_plist
             abi-results/plist.log
             abi-results/plist-root/mobile/*.plist
@@ -293,5 +306,6 @@ jobs:
             test_choices
             test_strings
             test_uttype
+            test_reachability
             probe_version
           if-no-files-found: error
