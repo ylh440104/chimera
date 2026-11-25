@@ -1,4 +1,5 @@
 import datetime
+import hashlib
 import ipaddress
 import pathlib
 import sys
@@ -60,7 +61,11 @@ def main():
     bad = bytearray((output / 'leaf.der').read_bytes())
     bad[-1] ^= 1
     (output / 'tampered.der').write_bytes(bad)
-    print('Wrote', len(values) + 1, 'public certificate fixtures; private keys were not saved')
+    system_root = pathlib.Path(__file__).with_name('isrg-root-x1.der').read_bytes()
+    if hashlib.sha256(system_root).hexdigest() != '96bcec06264976f37460779acf28c5a7cfe8a3c0aae11a8ffcee05c0bddf08c6':
+        raise RuntimeError('ISRG public root fingerprint mismatch')
+    (output / 'system-root.der').write_bytes(system_root)
+    print('Wrote', len(values) + 2, 'public certificate fixtures; private keys were not saved')
 
 
 if __name__ == '__main__':

@@ -161,6 +161,7 @@ int main(int argc, char **argv)
     if (!scenario("weak-rsa", "intermediate", "root", @"chimera.test", 1, 1, 0)) return 47;
     if (!scenario("medium-lived", "intermediate", "root", @"chimera.test", 1, 1, 1)) return 48;
     if (!scenario("long-lived", "intermediate", "root", 0, 0, 0, 1)) return 49;
+    if (!scenario("system-root", 0, 0, 0, 0, 0, 1)) return 50;
     SecCertificateRef intermediate = read_certificate("intermediate"), root = read_certificate("root");
     SecPolicyRef policy = SecPolicyCreateSSL(1, (CFStringRef)@"chimera.test");
     SecTrustRef trust = 0;

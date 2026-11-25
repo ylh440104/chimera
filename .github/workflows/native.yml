@@ -239,7 +239,7 @@ jobs:
       - name: Compress local validation bundle
         run: |
           printf '%s\n' "$GITHUB_SHA" > native-commit.txt
-          tar -cJf native-bundle.tar.xz native-commit.txt chmdump chmdemand chimera_run test_* probe_version
+          tar -cJf native-bundle.tar.xz native-commit.txt third_party/openssl/LICENSE.txt chmdump chmdemand chimera_run test_* probe_version
           sha256sum native-bundle.tar.xz > native-bundle.sha256
       - uses: actions/upload-artifact@v4
         with:
