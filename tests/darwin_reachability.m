@@ -76,6 +76,10 @@ static void route_callback(void *target, Flags flags, void *info)
 
 int reachability_check(int stage)
 {
+    if (stage == 5) {
+        Flags flags = 0;
+        return SCNetworkReachabilityGetFlags(route, &flags) ? (int)flags : -1;
+    }
     if (stage == 1) {
         route = SCNetworkReachabilityCreateWithName(0, "127.0.0.1");
         if (!route || !SCNetworkReachabilitySetCallback(route, route_callback, 0) ||

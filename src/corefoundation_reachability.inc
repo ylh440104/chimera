@@ -191,11 +191,15 @@ static int sc_route(const struct sockaddr_storage *destination, uint32_t *flags)
     struct ifaddrs *interfaces = NULL;
     if (getifaddrs(&interfaces)) return 1;
     for (struct ifaddrs *i = interfaces; i; i = i->ifa_next) {
-        if (!(i->ifa_flags & IFF_UP) || !i->ifa_addr || i->ifa_addr->sa_family != family) continue;
+        if (!i->ifa_addr || i->ifa_addr->sa_family != family) continue;
         size_t n = 0, mask_length = 0;
         const unsigned char *ip = sc_ip(i->ifa_addr, &n);
         const unsigned char *mask = sc_ip(i->ifa_netmask, &mask_length);
         if (!ip || n != length) continue;
+        if (!(i->ifa_flags & IFF_UP)) {
+            if (source && source_length == n && !memcmp(ip, source, n)) { *flags = 0; break; }
+            continue;
+        }
         if (!memcmp(ip, target, n)) *flags |= 1u << 16;
         if (!source || source_length != n || memcmp(ip, source, n)) continue;
         if (sc_cellular(i->ifa_name)) *flags |= 1u << 18;
