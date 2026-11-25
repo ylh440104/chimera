@@ -55,14 +55,13 @@ static void array_add_all(void *self, const char *sel, void *other)
     fo_array *a = self, *b = other;
     int64_t count = b->count;
     if (!a_reserve(a, (size_t)a->count + (size_t)count)) return;
-    memmove(a->items + a->count, b->items, (size_t)count * sizeof(void *));
-    a->count += count; a->mutations++;
+    for (int64_t i = 0; i < count; i++) if (!a_push(a, b->items[i])) return;
 }
 static void array_insert(void *self, const char *sel, void *object, unsigned long index)
 {
     (void)sel;
     fo_array *a = self;
-    if (!fo_is_array(a) || !object || index > (unsigned long)a->count || !a_reserve(a, (size_t)a->count + 1)) {
+    if (!fo_is_array(a) || !object || index > (unsigned long)a->count || !a_reserve(a, (size_t)a->count + 1) || !cf_array_hold(a, object)) {
         collection_error("insertObject:atIndex:"); return;
     }
     memmove(a->items + index + 1, a->items + index, ((size_t)a->count - index) * sizeof(void *));
@@ -72,6 +71,7 @@ static void array_remove_index(void *self, const char *sel, unsigned long index)
 {
     (void)sel; fo_array *a = self;
     if (!fo_is_array(a) || index >= (unsigned long)a->count) { collection_error("removeObjectAtIndex:"); return; }
+    cf_array_drop(a, a->items[index]);
     memmove(a->items + index, a->items + index + 1, ((size_t)a->count - index - 1) * sizeof(void *));
     a->items[--a->count] = NULL; a->mutations++;
 }

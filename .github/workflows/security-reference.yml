@@ -1,0 +1,54 @@
+name: security-reference
+
+on:
+  push:
+    paths:
+      - "tests/darwin_security.m"
+      - "tests/make_security_fixtures.py"
+      - ".github/workflows/security-reference.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  reference:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Apple Security behavior
+        run: |
+          mkdir -p dist
+          printf '%s\n' "$GITHUB_SHA" > dist/commit.txt
+          {
+            TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S Asia/Shanghai'
+            sw_vers
+            uname -m
+            xcrun --show-sdk-version
+          } > dist/system.txt
+          python -m pip install cryptography==44.0.2
+          python tests/make_security_fixtures.py dist/certificates
+          cp tests/darwin_security.m dist/
+          xcrun clang -O2 -Wall -Wextra -Werror -Wno-deprecated-declarations -fno-objc-arc -DCHIMERA_APPLE_REFERENCE tests/darwin_security.m -framework Foundation -framework Security -o dist/security-reference
+          rc=0
+          dist/security-reference "$PWD/dist/certificates" > dist/stdout.txt 2> dist/stderr.txt || rc=$?
+          printf '%s\n' "$rc" > dist/exit-code.txt
+          test "$rc" -eq 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chimera-security-reference
+          path: dist/
+          if-no-files-found: error
+      - name: Publish evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          archive="$RUNNER_TEMP/security-reference-${GITHUB_SHA:0:7}.zip"
+          (cd dist && zip -r "$archive" .)
+          shasum -a 256 "$archive" > "$archive.sha256"
+          gh release create "security-reference-${GITHUB_RUN_ID}" "$archive" "$archive.sha256" --target "$GITHUB_SHA" --title "Security reference ${GITHUB_SHA:0:7}" --notes "Apple Security 证书信任对照与公开测试证书。" --prerelease

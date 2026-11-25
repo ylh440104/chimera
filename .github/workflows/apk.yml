@@ -14,6 +14,9 @@ on:
       - "tests/darwin_uttype.m"
       - ".github/workflows/apk.yml"
       - "tests/darwin_reachability.m"
+      - "tests/darwin_security.m"
+      - "tests/make_security_fixtures.py"
+      - "tools/build_crypto.sh"
   workflow_dispatch:
 
 permissions:
@@ -58,6 +61,14 @@ jobs:
           printf '%s' "$CHIMERA_SIGNING_STORE" | base64 --decode > "$RUNNER_TEMP/chimera.p12"
           test -s "$RUNNER_TEMP/chimera.p12"
 
+      - uses: actions/cache@v4
+        with:
+          path: crypto-android
+          key: openssl-3.5.9-android-arm64-api26-v1
+      - name: Build pinned certificate verifier
+        env:
+          ANDROID_NDK_ROOT: /usr/local/lib/android/sdk/ndk/26.1.10909125
+        run: sh tools/build_crypto.sh android-arm64 "$PWD/crypto-android"
       - name: Darwin formatter device fixture
         run: |
           if ! command -v clang-18 >/dev/null || ! command -v ld64.lld-18 >/dev/null; then
@@ -77,6 +88,12 @@ jobs:
 
           clang-18 -target arm64-apple-ios15.0 -O2 -fno-objc-arc -fno-builtin -fno-stack-protector -c tests/darwin_reachability.m -o "$RUNNER_TEMP/darwin_reachability.o"
           ld64.lld-18 -arch arm64 -platform_version ios 15.0 15.0 -e _main -fixup_chains -exported_symbol _reachability_check -undefined dynamic_lookup -o android/app/src/androidTest/assets/darwin_reachability "$RUNNER_TEMP/darwin_reachability.o"
+
+          clang-18 -target arm64-apple-ios15.0 -O2 -fno-objc-arc -fno-builtin -fno-stack-protector -c tests/darwin_security.m -o "$RUNNER_TEMP/darwin_security.o"
+          ld64.lld-18 -arch arm64 -platform_version ios 15.0 15.0 -e _main -fixup_chains -undefined dynamic_lookup -o android/app/src/androidTest/assets/darwin_security "$RUNNER_TEMP/darwin_security.o"
+          python3 -m venv "$RUNNER_TEMP/certificates"
+          "$RUNNER_TEMP/certificates/bin/pip" install cryptography==44.0.2
+          "$RUNNER_TEMP/certificates/bin/python" tests/make_security_fixtures.py android/app/src/androidTest/assets/security
 
       - uses: actions/cache@v4
         with:
@@ -140,11 +157,11 @@ jobs:
         run: |
           compiler="$ANDROID_HOME/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
           "$compiler" -O2 -g -Wall -Wextra -Wno-unused-parameter -std=gnu11 -Ithird_party/yxml -c third_party/yxml/yxml.c -o "$RUNNER_TEMP/yxml-android.o"
-          "$compiler" -O2 -g -Wall -Wextra -Werror -std=gnu11 -pthread -Iinclude -Ithird_party/yxml \
+          "$compiler" -O2 -g -Wall -Wextra -Werror -std=gnu11 -pthread -Iinclude -Ithird_party/yxml -Icrypto-android/include \
             -o dist/test_formatters_android tests/test_formatters.c src/macho.c src/fixups.c src/session.c \
             src/objc.c src/objc_arm64.S src/libcshim.c src/dispatch.c src/foundation.c src/frameworks.c \
             src/format.c src/uikit.c src/scene.c src/scene_manifest.c src/trap.c src/loader.c \
-            "$RUNNER_TEMP/yxml-android.o" -lm -ldl -lz
+            "$RUNNER_TEMP/yxml-android.o" crypto-android/lib/libcrypto.a -lm -ldl -lz
           cd dist
           sha256sum test_formatters_android >> SHA256SUMS
 

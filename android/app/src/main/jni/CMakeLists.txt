@@ -23,6 +23,10 @@ add_library(chimera SHARED
         ${ROOT}/src/trap.c
         ${ROOT}/src/loader.c)
 
-target_include_directories(chimera PRIVATE ${ROOT}/include ${ROOT}/third_party/yxml)
+add_library(chimera_crypto STATIC IMPORTED)
+set_target_properties(chimera_crypto PROPERTIES IMPORTED_LOCATION ${ROOT}/crypto-android/lib/libcrypto.a)
+target_include_directories(chimera PRIVATE ${ROOT}/include ${ROOT}/third_party/yxml ${ROOT}/crypto-android/include)
+target_link_options(chimera PRIVATE -Wl,--exclude-libs,libcrypto.a)
+target_link_libraries(chimera chimera_crypto)
 
 target_link_libraries(chimera log m dl z)

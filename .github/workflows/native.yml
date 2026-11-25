@@ -50,6 +50,16 @@ jobs:
           cp tests/scene-info.plist manifest-case/Info.plist
           ./test_scene_manifest "$PWD/manifest-case"
 
+      - uses: actions/cache@v4
+        with:
+          path: crypto-native
+          key: openssl-3.5.9-linux-aarch64-v1
+      - name: Build pinned certificate verifier
+        run: sh tools/build_crypto.sh linux-aarch64 "$PWD/crypto-native"
+      - name: Certificate fixtures
+        run: |
+          python3 -m venv "$RUNNER_TEMP/certificates"
+          "$RUNNER_TEMP/certificates/bin/pip" install cryptography==44.0.2
       - name: session build
         run: |
           SRC="src/macho.c src/fixups.c src/session.c src/objc.c src/objc_arm64.S \
@@ -57,10 +67,10 @@ jobs:
                src/format.c src/uikit.c src/scene.c src/scene_manifest.c yxml.o \
                src/trap.c src/loader.c"
           for tool in chmdump chmdemand chimera_run; do
-            cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -pthread -Iinclude -Ithird_party/yxml -o "$tool" "tools/$tool.c" $SRC -lm -ldl -lz
+            cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -pthread -Iinclude -Ithird_party/yxml -Icrypto-native/include -o "$tool" "tools/$tool.c" $SRC crypto-native/lib/libcrypto.a -lm -ldl -lz
           done
-          for test in test_input test_table test_services test_startup test_transfer test_split test_sync test_libc_compat test_pthread test_streams test_formatters test_choices test_strings test_uttype test_reachability probe_version; do
-            cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -pthread -Iinclude -Ithird_party/yxml -o "$test" "tests/$test.c" $SRC -lm -ldl -lz
+          for test in test_input test_table test_services test_startup test_transfer test_split test_sync test_libc_compat test_pthread test_streams test_formatters test_choices test_strings test_uttype test_reachability test_security probe_version; do
+            cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -pthread -Iinclude -Ithird_party/yxml -Icrypto-native/include -o "$test" "tests/$test.c" $SRC crypto-native/lib/libcrypto.a -lm -ldl -lz
           done
           ./chmdump tests/fixture.ios > dump.txt
           head -3 dump.txt
@@ -184,6 +194,14 @@ jobs:
           CHM_SANDBOX_ROOT="$PWD/abi-results/streams-root" timeout 30 ./test_streams "$PWD/abi-results/darwin_streams" > abi-results/streams.log 2>&1 || { cat abi-results/streams.log; exit 1; }
           cat abi-results/streams.log
 
+      - name: Security trust regression
+        run: |
+          clang-18 -target arm64-apple-ios15.0 -O2 -fno-objc-arc -fno-builtin -fno-stack-protector -c tests/darwin_security.m -o abi-results/darwin_security.o
+          ld64.lld-18 -arch arm64 -platform_version ios 15.0 15.0 -e _main -fixup_chains -undefined dynamic_lookup -o abi-results/darwin_security abi-results/darwin_security.o
+          "$RUNNER_TEMP/certificates/bin/python" tests/make_security_fixtures.py "$PWD/abi-results/security-root/mobile/security"
+          CHM_SANDBOX_ROOT="$PWD/abi-results/security-root" timeout 30 ./test_security "$PWD/abi-results/darwin_security" > abi-results/security.log 2>&1 || { cat abi-results/security.log; exit 1; }
+          cat abi-results/security.log
+
       - name: Network reachability regression
         run: |
           clang-18 -target arm64-apple-ios15.0 -O2 -fno-objc-arc -fno-builtin -fno-stack-protector -c tests/darwin_reachability.m -o abi-results/darwin_reachability.o
@@ -273,6 +291,9 @@ jobs:
             abi-results/darwin_reachability
             abi-results/reachability.log
             abi-results/reachability-netns.log
+            abi-results/darwin_security
+            abi-results/security.log
+            abi-results/security-root/mobile/security
             abi-results/darwin_plist
             abi-results/plist.log
             abi-results/plist-root/mobile/*.plist
@@ -307,5 +328,6 @@ jobs:
             test_strings
             test_uttype
             test_reachability
+            test_security
             probe_version
           if-no-files-found: error

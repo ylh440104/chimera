@@ -11,6 +11,7 @@ typedef struct cf_owned {
     size_t references;
     long string_maximum;
     void (*destroy)(void *);
+    int objc_array;
     cf_array_callbacks callbacks;
     struct cf_owned *next;
 } cf_owned;
@@ -55,6 +56,8 @@ static void cf_owned_release(void *object)
         fo_array *array = object;
         if (entry->callbacks.release)
             for (int64_t i = 0; i < array->count; i++) entry->callbacks.release(entry->allocator, array->items[i]);
+        if (entry->objc_array)
+            for (int64_t i = 0; i < array->count; i++) cf_owned_release(array->items[i]);
         free(array->items);
     } else if (fo_is_data(object)) free(((fo_data *)object)->bytes);
     else if (fo_is_string(object)) free(((fo_string *)object)->bytes);
@@ -62,6 +65,38 @@ static void cf_owned_release(void *object)
     free(entry);
 }
 
+static int cf_array_hold(fo_array *array, void *object)
+{
+    cf_owned *entry = cf_owned_find(array);
+    if (!entry && cf_owned_find(object)) {
+        if (!cf_owned_add(array, NULL, NULL)) return 0;
+        entry = cf_owned_find(array);
+        entry->objc_array = 1;
+        for (int64_t i = 0; i < array->count; i++) cf_owned_retain(array->items[i]);
+    }
+    if (entry && entry->objc_array) cf_owned_retain(object);
+    return 1;
+}
+
+static void cf_array_drop(fo_array *array, void *object)
+{
+    cf_owned *entry = cf_owned_find(array);
+    if (entry && entry->objc_array) cf_owned_release(object);
+}
+
+static int cf_collection_dispose(void *object)
+{
+    if (!cf_owned_find(object)) return 0;
+    cf_owned_release(object);
+    return 1;
+}
+
+static unsigned long sec_type_id(void *object);
+
+static int sec_is_object(void *object)
+{
+    return sec_type_id(object) != 0;
+}
 void *chm_foundation_cf_retain(void *object) { return cf_owned_retain(object); }
 void chm_foundation_cf_release(void *object) { cf_owned_release(object); }
 
@@ -180,6 +215,7 @@ static void cf_dictionary_values(void *object, const void **keys, const void **v
 
 static unsigned long cf_hash(void *object)
 {
+    if (sec_is_object(object)) return sec_hash(object);
     if (fo_is_string(object) || fo_is_cfstring(object)) {
         const unsigned char *p = (const unsigned char *)fo_bytes(object);
         unsigned long hash = 5381;
@@ -204,6 +240,7 @@ static unsigned long cf_hash(void *object)
 static unsigned long cf_type_id(void *object)
 {
     if (!object) return 0;
+    if (sec_is_object(object)) return sec_type_id(object);
     if (fo_is_string(object) || fo_is_cfstring(object)) return 7;
     if (fo_is_data(object)) return 19;
     if (fo_is_array(object)) return 18;
@@ -256,11 +293,23 @@ static void *cf_bundle_identifier(void *identifier) { return bundle_by_identifie
 
 #include "corefoundation_strings.inc"
 #include "corefoundation_uttype.inc"
+#include "corefoundation_security.inc"
 #include "corefoundation_reachability.inc"
 
 void *chm_foundation_cf_lookup(const char *symbol)
 {
     static const struct { const char *name; void *function; } entries[] = {
+        {"_SecCertificateCreateWithData", sec_certificate_create},
+        {"_SecCertificateCopyData", sec_certificate_data},
+        {"_SecPolicyCreateBasicX509", sec_policy_basic},
+        {"_SecPolicyCreateSSL", sec_policy_ssl},
+        {"_SecTrustCreateWithCertificates", sec_trust_create},
+        {"_SecTrustSetPolicies", sec_trust_policies},
+        {"_SecTrustSetAnchorCertificates", sec_trust_anchors},
+        {"_SecTrustEvaluate", sec_trust_evaluate},
+        {"_SecTrustGetCertificateCount", sec_trust_count},
+        {"_SecTrustGetCertificateAtIndex", sec_trust_certificate},
+        {"_SecTrustCopyPublicKey", sec_trust_key},
         {"_SCNetworkReachabilityCreateWithAddress", sc_create_address},
         {"_SCNetworkReachabilityCreateWithName", sc_create_name},
         {"_SCNetworkReachabilityGetFlags", sc_get_flags},

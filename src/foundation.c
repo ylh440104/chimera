@@ -120,7 +120,13 @@ typedef struct {
 
 #define FO_HANDLE_MAGIC 0x464f484e444cull
 
+static int cf_array_hold(fo_array *array, void *object);
+static void cf_array_drop(fo_array *array, void *object);
+static int cf_collection_dispose(void *object);
+static int sec_equal(void *left, void *right);
+static unsigned long sec_hash(void *object);
 static fo_class *g_classes[FO_MAX_CLASSES];
+static unsigned long sec_type_id(void *object);
 static int g_class_count;
 static chm_session *g_session;
 static fo_pair g_pairs[FO_MAX_ITEMS];
@@ -639,7 +645,7 @@ static int d_reserve(fo_dict *d, size_t need)
 
 static int a_push(fo_array *a, void *obj)
 {
-    if (!obj || !a_reserve(a, (size_t)a->count + 1)) return 0;
+    if (!obj || !a_reserve(a, (size_t)a->count + 1) || !cf_array_hold(a, obj)) return 0;
     a->items[a->count++] = obj;
     a->mutations++;
     return 1;
@@ -719,6 +725,7 @@ static void *o_class(void *self)
 
 static long o_hash(void *self)
 {
+    if (sec_type_id(self)) return (long)sec_hash(self);
     const unsigned char *p;
 
     if (!fo_is_string(self))
@@ -784,6 +791,12 @@ static int o_is_equal(void *self, const char *sel, void *other)
     (void)sel;
     if (self == other) return 1;
     if (!self || !other) return 0;
+    int security = sec_equal(self, other);
+    if (security >= 0) return security;
+    if (fo_is_data(self) && fo_is_data(other)) {
+        fo_data *a = self, *b = other;
+        return a->length == b->length && (!a->length || !memcmp(a->bytes, b->bytes, (size_t)a->length));
+    }
     if ((fo_is_string(self) || fo_is_cfstring(self)) &&
         (fo_is_string(other) || fo_is_cfstring(other)))
         return strcmp(fo_bytes(self), fo_bytes(other)) == 0;
@@ -1240,6 +1253,7 @@ static void a_remove_all(void *self, const char *sel)
     (void)sel;
     if (!fo_is_array(self)) return;
     fo_array *a = self;
+    for (int64_t i = 0; i < a->count; i++) cf_array_drop(a, a->items[i]);
     if (a->count) memset(a->items, 0, (size_t)a->count * sizeof(*a->items));
     a->count = 0;
     a->mutations++;
@@ -1382,8 +1396,8 @@ static void *d_keys(void *self)
     fo_array *a = fo_array_new();
     if (!a) return NULL;
     if (!a_reserve(a, (size_t)d->count)) { free(a->items); free(a); return NULL; }
-    memcpy(a->items, d->keys, (size_t)d->count * sizeof(void *));
-    a->count = d->count;
+    for (int64_t i = 0; i < d->count; i++)
+        if (!a_push(a, d->keys[i])) return NULL;
     return a;
 }
 
@@ -1394,13 +1408,14 @@ static void *d_values(void *self)
     fo_array *a = fo_array_new();
     if (!a) return NULL;
     if (!a_reserve(a, (size_t)d->count)) { free(a->items); free(a); return NULL; }
-    memcpy(a->items, d->values, (size_t)d->count * sizeof(void *));
-    a->count = d->count;
+    for (int64_t i = 0; i < d->count; i++)
+        if (!a_push(a, d->values[i])) return NULL;
     return a;
 }
 
 static void collection_dispose(void *obj)
 {
+    if (cf_collection_dispose(obj)) return;
     if (fo_is_array(obj)) free(((fo_array *)obj)->items);
     else if (fo_is_dict(obj)) { free(((fo_dict *)obj)->keys); free(((fo_dict *)obj)->values); }
     free(obj);
@@ -1437,8 +1452,18 @@ static void *a_init_objects(void *self, const char *sel, void *const *objects, s
     if (!fo_is_array(a) || (count && !objects)) return NULL;
     for (size_t i = 0; i < count; i++) if (!objects[i]) return NULL;
     if (!a_reserve(a, count)) return NULL;
-    if (count) memmove(a->items, objects, count * sizeof(void *));
-    a->count = (int64_t)count;
+    void **copy = count ? malloc(count * sizeof(*copy)) : NULL;
+    if (count && !copy) return NULL;
+    if (count) memcpy(copy, objects, count * sizeof(*copy));
+    for (size_t i = 0; i < count; i++) {
+        if (!cf_array_hold(a, copy[i])) {
+            for (size_t j = 0; j < i; j++) cf_array_drop(a, copy[j]);
+            free(copy); return NULL;
+        }
+    }
+    a_remove_all(a, NULL);
+    if (count) memcpy(a->items, copy, count * sizeof(*copy));
+    free(copy); a->count = (int64_t)count;
     a->mutations++;
     return a;
 }
