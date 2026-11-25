@@ -58,4 +58,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="uttype-reference-${GITHUB_RUN_ID}"
-          gh release create "$tag" dist/* --target "$GITHUB_SHA" --title "UTType reference ${GITHUB_SHA:0:7}" --notes "Apple 系统 UTType 行为对照数据与探针，非 Chimera 兼容验收或 APK 发布。"
+          archive="$RUNNER_TEMP/uttype-reference-${GITHUB_SHA:0:7}.zip"
+          zip -j "$archive" dist/*
+          unzip -t "$archive"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$archive" dist/SHA256SUMS --clobber
+          else
+            gh release create "$tag" "$archive" dist/SHA256SUMS --target "$GITHUB_SHA" --title "UTType reference ${GITHUB_SHA:0:7}" --notes "Apple 系统 UTType 行为对照数据与探针，非 Chimera 兼容验收或 APK 发布。"
+          fi
