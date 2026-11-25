@@ -272,6 +272,23 @@ static int sec_chain_save(sec_object *trust, STACK_OF(X509) *chain)
     return 1;
 }
 
+static int sec_ssl_lifetime(sec_object *trust, sec_object *policy)
+{
+    if (!policy->ssl || !policy->server) return 1;
+    X509 *leaf = trust->certificates.items[0]->certificate;
+    const ASN1_TIME *before = X509_get0_notBefore(leaf), *after = X509_get0_notAfter(leaf);
+    int days = 0, seconds = 0;
+    if (!ASN1_TIME_diff(&days, &seconds, before, after) || days < 0) return 0;
+    time_t july2019 = 1561939200, september2020 = 1598918400, march2018 = 1519862400;
+    long long duration = (long long)days * 86400 + seconds;
+    if (trust->custom_anchors) {
+        if (X509_cmp_time(before, &july2019) > 0 && duration > 825LL * 86400 + 3600) return 0;
+    } else {
+        if (X509_cmp_time(before, &september2020) > 0 && duration > 398LL * 86400) return 0;
+        if (X509_cmp_time(before, &march2018) > 0 && duration > 825LL * 86400 + 3600) return 0;
+    }
+    return 1;
+}
 static int sec_trust_evaluate(void *object, uint32_t *result)
 {
     if (result) *result = 0;
@@ -299,14 +316,18 @@ static int sec_trust_evaluate(void *object, uint32_t *result)
         }
         X509_VERIFY_PARAM *parameter = X509_STORE_CTX_get0_param(context);
         X509_VERIFY_PARAM_set_depth(parameter, 32);
-        X509_VERIFY_PARAM_set_auth_level(parameter, 1);
+        X509_VERIFY_PARAM_set_auth_level(parameter, 2);
         if (trust->custom_anchors) X509_VERIFY_PARAM_set_flags(parameter, X509_V_FLAG_PARTIAL_CHAIN);
         if (policy->ssl) {
+            if (!sec_ssl_lifetime(trust, policy)) accepted = 0;
             if (!X509_STORE_CTX_set_purpose(context, policy->server ? X509_PURPOSE_SSL_SERVER : X509_PURPOSE_SSL_CLIENT)) status = -50;
             if (policy->hostname) {
                 unsigned char address[16];
                 int ip = inet_pton(AF_INET, policy->hostname, address) == 1 || inet_pton(AF_INET6, policy->hostname, address) == 1;
-                X509_VERIFY_PARAM_set_hostflags(parameter, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+                time_t july2019 = 1561939200;
+                unsigned host_flags = X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS;
+                if (policy->server && X509_cmp_time(X509_get0_notBefore(trust->certificates.items[0]->certificate), &july2019) > 0) host_flags |= X509_CHECK_FLAG_NEVER_CHECK_SUBJECT;
+                X509_VERIFY_PARAM_set_hostflags(parameter, host_flags);
                 if (!*policy->hostname) accepted = 0;
                 else if (ip ? !X509_VERIFY_PARAM_set1_ip_asc(parameter, policy->hostname) :
                     !X509_VERIFY_PARAM_set1_host(parameter, policy->hostname, strlen(policy->hostname))) status = -50;

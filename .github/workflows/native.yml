@@ -236,6 +236,16 @@ jobs:
           CHM_SANDBOX_ROOT="$PWD/abi-results/formatters-root" timeout 30 ./test_formatters "$PWD/abi-results/darwin_formatters" > abi-results/formatters.log 2>&1 || { cat abi-results/formatters.log; exit 1; }
           cat abi-results/formatters.log
 
+      - name: Compress local validation bundle
+        run: |
+          printf '%s\n' "$GITHUB_SHA" > native-commit.txt
+          tar -cJf native-bundle.tar.xz native-commit.txt chmdump chmdemand chimera_run test_* probe_version
+          sha256sum native-bundle.tar.xz > native-bundle.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chimera-native-bundle
+          path: |
+            native-bundle.*
       - uses: actions/upload-artifact@v4
         if: always()
         with:

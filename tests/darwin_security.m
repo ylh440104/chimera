@@ -156,6 +156,11 @@ int main(int argc, char **argv)
     if (!scenario("leaf", "intermediate", "root", @"127.0.0.2", 1, 1, 0)) return 27;
     if (!scenario("ec-leaf", "intermediate", "root", @"chimera.test", 1, 1, 1)) return 28;
     if (!scenario("leaf", "intermediate", "intermediate", @"chimera.test", 1, 1, 1)) return 29;
+    if (!scenario("long-lived", "intermediate", "root", @"chimera.test", 1, 1, 0)) return 45;
+    if (!scenario("cn-only", "intermediate", "root", @"chimera.test", 1, 1, 0)) return 46;
+    if (!scenario("weak-rsa", "intermediate", "root", @"chimera.test", 1, 1, 0)) return 47;
+    if (!scenario("medium-lived", "intermediate", "root", @"chimera.test", 1, 1, 1)) return 48;
+    if (!scenario("long-lived", "intermediate", "root", 0, 0, 0, 1)) return 49;
     SecCertificateRef intermediate = read_certificate("intermediate"), root = read_certificate("root");
     SecPolicyRef policy = SecPolicyCreateSSL(1, (CFStringRef)@"chimera.test");
     SecTrustRef trust = 0;

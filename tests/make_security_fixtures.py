@@ -35,6 +35,7 @@ def main():
     intermediate = ec.generate_private_key(ec.SECP256R1())
     leaf = rsa.generate_private_key(65537, 2048)
     unrelated = ec.generate_private_key(ec.SECP256R1())
+    weak = rsa.generate_private_key(65537, 1024)
     hosts = [x509.DNSName('chimera.test'), x509.DNSName('*.wild.chimera.test'), x509.IPAddress(ipaddress.ip_address('127.0.0.1'))]
     server = [ExtendedKeyUsageOID.SERVER_AUTH]
     values = {
@@ -49,6 +50,10 @@ def main():
         'ec-leaf': certificate('EC Leaf', unrelated, 'Chimera Test Intermediate', intermediate, 9, usage=server, hosts=hosts),
         'nonca-intermediate': certificate('Chimera Test Intermediate', intermediate, 'Chimera Test Root', root, 10, False),
         'short-root': certificate('Chimera Test Root', root, 'Chimera Test Root', root, 11, True, 0),
+        'long-lived': certificate('Long Lived', leaf, 'Chimera Test Intermediate', intermediate, 12, usage=server, hosts=hosts, dates=(datetime.datetime(2020, 1, 1), datetime.datetime(2040, 1, 1))),
+        'cn-only': certificate('chimera.test', leaf, 'Chimera Test Intermediate', intermediate, 13, usage=server),
+        'weak-rsa': certificate('Weak RSA', weak, 'Chimera Test Intermediate', intermediate, 14, usage=server, hosts=hosts),
+        'medium-lived': certificate('Medium Lived', leaf, 'Chimera Test Intermediate', intermediate, 15, usage=server, hosts=hosts, dates=(datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1), datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=500))),
     }
     for label, value in values.items():
         (output / (label + '.der')).write_bytes(value.public_bytes(serialization.Encoding.DER))
