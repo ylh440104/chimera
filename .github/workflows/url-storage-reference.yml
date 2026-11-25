@@ -1,0 +1,52 @@
+name: url-storage-reference
+
+on:
+  push:
+    paths:
+      - ".github/reference/url-storage.m"
+      - ".github/workflows/url-storage-reference.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  reference:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Query Apple URL storage
+        run: |
+          mkdir -p dist
+          printf '%s\n' "$GITHUB_SHA" > dist/commit.txt
+          {
+            TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S Asia/Shanghai'
+            sw_vers
+            uname -m
+            xcrun --show-sdk-version
+          } > dist/system.txt
+          cp .github/reference/url-storage.m dist/
+          xcrun clang -O2 -Wall -Wextra -Werror -Wno-deprecated-declarations -fno-objc-arc .github/reference/url-storage.m -framework Foundation -framework Security -o dist/url-storage-reference
+          dist/url-storage-reference "$RUNNER_TEMP/chimera-url-cache" "$PWD/tests/isrg-root-x1.der" > dist/results.jsonl 2> dist/stderr.txt
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          rows = [json.loads(line) for line in Path('dist/results.jsonl').read_text().splitlines()]
+          assert len(rows) >= 15
+          print('Recorded Apple URL storage cases:', len(rows))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chimera-url-storage-reference
+          path: dist/
+          if-no-files-found: error
+      - name: Publish reference
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          archive="$RUNNER_TEMP/url-storage-reference-${GITHUB_SHA:0:7}.zip"
+          (cd dist && zip -r "$archive" .)
+          shasum -a 256 "$archive" > "$archive.sha256"
+          gh release create "url-storage-reference-${GITHUB_RUN_ID}" "$archive" "$archive.sha256" --target "$GITHUB_SHA" --title "URL storage reference ${GITHUB_SHA:0:7}" --notes "Apple 缓存与凭据行为对照。" --prerelease
