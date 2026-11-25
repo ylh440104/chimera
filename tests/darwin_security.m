@@ -198,7 +198,10 @@ int main(int argc, char **argv)
 #ifdef CHIMERA_APPLE_REFERENCE
     printf("keys present=%d,%d,%d equal=%d objc=%d hash=%lu,%lu different=%d%c", key != NULL, key_a != NULL, key_b != NULL, key && key_a ? CFEqual(key, key_a) : -1, key && key_a ? [(id)key isEqual:(id)key_a] : -1, key ? CFHash(key) : 0, key_a ? CFHash(key_a) : 0, key && key_b ? CFEqual(key, key_b) : -1, 10);
 #endif
-    if (!key_a || !key_b || !CFEqual(key, key_a) || ![(id)key isEqual:(id)key_a] || CFHash(key) != CFHash(key_a) || CFEqual(key, key_b)) return 43;
+    if (!key_a || !key_b || !CFEqual(key, key_a) || ![(id)key isEqual:(id)key_a] || CFEqual(key, key_b)) return 43;
+#ifndef CHIMERA_APPLE_REFERENCE
+    if (CFHash(key) != CFHash(key_a)) return 44;
+#endif
     CFRelease(key); CFRelease(key_a); CFRelease(key_b); CFRelease(a); CFRelease(b);
     CFRelease(same); CFRelease(different); CFRelease(basic);
     puts("security: certificate roundtrip, RSA/EC keys, trusted/untrusted chains, signatures, dates, hostname, IP, wildcard, EKU, CA constraints, policy invalidation and collection ownership passed");
