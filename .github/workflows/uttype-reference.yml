@@ -1,0 +1,61 @@
+name: uttype-reference
+
+on:
+  push:
+    paths:
+      - ".github/reference/uttype.m"
+      - ".github/workflows/uttype-reference.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  reference:
+    runs-on: macos-14
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and query Apple UTType
+        run: |
+          mkdir -p dist
+          printf '%s\n' "$GITHUB_SHA" > dist/commit.txt
+          cp .github/reference/uttype.m dist/uttype.m
+          {
+            TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S Asia/Shanghai'
+            sw_vers
+            uname -m
+            xcrun --show-sdk-version
+            xcrun clang --version
+          } > dist/system.txt
+          xcrun clang -O2 -Wall -Wextra -Werror -Wno-deprecated-declarations -fno-objc-arc .github/reference/uttype.m -framework Foundation -framework CoreServices -o dist/uttype-reference
+          dist/uttype-reference > dist/results.jsonl 2> dist/stderr.txt
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          rows = [json.loads(line) for line in Path('dist/results.jsonl').read_text().splitlines()]
+          tags = [row for row in rows if row['operation'] == 'from_tag']
+          assert len(tags) >= 100, len(tags)
+          png = next(row for row in tags if row['tag_class'] == 'public.filename-extension' and row['tag'] == 'png' and row['constraint'] is None)
+          assert png['result']['identifier'] == 'public.png'
+          assert png['result']['mime'] == 'image/png'
+          unknown = next(row for row in tags if row['tag'] == 'chm-unknown-extension-9f7c' and row['constraint'] is None)
+          assert unknown['result']['dynamic'] is True
+          assert unknown['result']['extension'] == 'chm-unknown-extension-9f7c'
+          print('Recorded Apple reference cases:', len(rows))
+          print('Unknown extension:', unknown['result']['identifier'])
+          PY
+          cd dist
+          shasum -a 256 commit.txt system.txt uttype.m uttype-reference results.jsonl stderr.txt > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chimera-uttype-reference
+          path: dist/
+          if-no-files-found: error
+      - name: Publish reference evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="uttype-reference-${GITHUB_RUN_ID}"
+          gh release create "$tag" dist/* --target "$GITHUB_SHA" --title "UTType reference ${GITHUB_SHA:0:7}" --notes "Apple 系统 UTType 行为对照数据与探针，非 Chimera 兼容验收或 APK 发布。"
