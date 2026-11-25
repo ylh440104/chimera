@@ -193,8 +193,11 @@ int main(int argc, char **argv)
     SecCertificateRef same = read_certificate("same-key"), different = read_certificate("ec-leaf");
     SecTrustRef a = 0, b = 0;
     if (SecTrustCreateWithCertificates(same, basic, &a) || SecTrustCreateWithCertificates(different, basic, &b)) return 41;
-    if (!evaluation(a, 0)) return 42;
+    if (!evaluation(a, 0) || !evaluation(b, 0)) return 42;
     SecKeyRef key_a = SecTrustCopyPublicKey(a), key_b = SecTrustCopyPublicKey(b);
+#ifdef CHIMERA_APPLE_REFERENCE
+    printf("keys present=%d,%d,%d equal=%d objc=%d hash=%lu,%lu different=%d%c", key != NULL, key_a != NULL, key_b != NULL, key && key_a ? CFEqual(key, key_a) : -1, key && key_a ? [(id)key isEqual:(id)key_a] : -1, key ? CFHash(key) : 0, key_a ? CFHash(key_a) : 0, key && key_b ? CFEqual(key, key_b) : -1, 10);
+#endif
     if (!key_a || !key_b || !CFEqual(key, key_a) || ![(id)key isEqual:(id)key_a] || CFHash(key) != CFHash(key_a) || CFEqual(key, key_b)) return 43;
     CFRelease(key); CFRelease(key_a); CFRelease(key_b); CFRelease(a); CFRelease(b);
     CFRelease(same); CFRelease(different); CFRelease(basic);
