@@ -29,7 +29,10 @@ static int await(chm_session *session, int stage)
         nanosleep(&(struct timespec){0, 10000000}, NULL);
     } while (now() < end);
     fprintf(stderr, "reachability timeout stage=%d", stage);
-    if (stage >= 2) system("ip -details link show lo; ip route show table local");
+    if (stage >= 2) {
+        int diagnostic = system("ip -details link show lo; ip route show table local");
+        fprintf(stderr, " diagnostic=%d", diagnostic);
+    }
     if (stage >= 2) fprintf(stderr, " probe=%d", chm_session_callback(session, check, &(int){5}));
     return -101;
 }
