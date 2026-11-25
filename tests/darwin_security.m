@@ -89,6 +89,17 @@ static int evaluation(SecTrustRef trust, int expected)
     SecTrustResultType result = 0;
     int status = SecTrustEvaluate(trust, &result);
     int valid = result == 1 || result == 4;
+#ifdef CHIMERA_APPLE_REFERENCE
+    printf("evaluate status=%d result=%u expected=%d%c", status, (unsigned)result, expected, 10);
+    if (status || valid != expected) {
+        CFErrorRef error = NULL;
+        Boolean accepted = SecTrustEvaluateWithError(trust, &error);
+        printf("accepted=%d%c", accepted, 10);
+        if (error) { CFShow(error); CFRelease(error); }
+        CFArrayRef properties = SecTrustCopyProperties(trust);
+        if (properties) { CFShow(properties); CFRelease(properties); }
+    }
+#endif
     return status == 0 && valid == expected;
 }
 

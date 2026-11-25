@@ -13,7 +13,9 @@ def name(value):
 
 
 def certificate(subject, key, issuer, signer, serial, ca=False, path=None, usage=None, hosts=None, dates=None, signing=True):
-    before, after = dates or (datetime.datetime(2020, 1, 1), datetime.datetime(2040, 1, 1))
+    now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+    interval = (datetime.datetime(2020, 1, 1), datetime.datetime(2040, 1, 1)) if ca else (now - datetime.timedelta(days=1), now + datetime.timedelta(days=90))
+    before, after = dates or interval
     builder = x509.CertificateBuilder().subject_name(name(subject)).issuer_name(name(issuer)).public_key(key.public_key()).serial_number(serial).not_valid_before(before).not_valid_after(after)
     builder = builder.add_extension(x509.BasicConstraints(ca, path), True)
     builder = builder.add_extension(x509.KeyUsage(signing, False, not ca, False, False, ca, ca, False, False), True)
