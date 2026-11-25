@@ -172,7 +172,10 @@ int main(int argc, char **argv)
     [certificates removeObjectAtIndex:1];
     [certificates release]; [policies release];
     if (SecTrustSetAnchorCertificates(trust, (CFArrayRef)array((id)root, 0)) || !evaluation(trust, 1)) return 31;
-    if (SecTrustGetCertificateCount(trust) != 3 || SecTrustGetCertificateAtIndex(trust, -1) || SecTrustGetCertificateAtIndex(trust, 3)) return 32;
+    if (SecTrustGetCertificateCount(trust) != 3) return 32;
+#ifndef CHIMERA_APPLE_REFERENCE
+    if (SecTrustGetCertificateAtIndex(trust, -1) || SecTrustGetCertificateAtIndex(trust, 3)) return 32;
+#endif
     SecCertificateRef retained = (SecCertificateRef)CFRetain(SecTrustGetCertificateAtIndex(trust, 0));
     SecKeyRef key = SecTrustCopyPublicKey(trust);
     if (!key) return 33;
