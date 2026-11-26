@@ -150,7 +150,7 @@ static int content(id cached)
 {
     if (!cached) return 0;
     NSData *data = [cached data];
-    NSHTTPURLResponse *response = [cached response];
+    NSHTTPURLResponse *response = (NSHTTPURLResponse *)[cached response];
     return [data length] == sizeof(payload) && !memcmp([data bytes], payload, sizeof(payload)) &&
         [response statusCode] == 200 && [[response MIMEType] isEqual:@"text/plain"] &&
         [[response textEncodingName] isEqual:@"utf-8"] && [[[cached userInfo] objectForKey:@"label"] isEqual:@"saved"];
