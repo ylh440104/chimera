@@ -222,7 +222,10 @@ int main(int argc, char **argv)
     if (!content([cache cachedResponseForRequest:base])) return 16;
     id held = [[cache cachedResponseForRequest:base] retain];
     [cache removeCachedResponseForRequest:base];
-    if ([cache cachedResponseForRequest:base] || !content(held) || [cache currentMemoryUsage]) return 17;
+    if ([cache cachedResponseForRequest:base] || !content(held)) return 17;
+#ifndef CHIMERA_APPLE_REFERENCE
+    if ([cache currentMemoryUsage]) return 17;
+#endif
     [held release];
     response = make_response(base, 1);
     [cache storeCachedResponse:response forRequest:base];
