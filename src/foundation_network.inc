@@ -1,6 +1,8 @@
 typedef struct net_object {
     void *object, *url, *body, *headers, *handler;
-    void *progress, *update, *destination, *manager, *response;
+    void *progress, *update, *destination, *manager, *response, *url_cache, *configuration;
+    unsigned long cache_policy;
+    int cookies, pipelining, cellular;
     char *temporary;
     int64_t expected;
     char *address, *method, *header_json;
@@ -11,6 +13,7 @@ typedef struct net_object {
 } net_object;
 static net_object *net_objects;
 static uint64_t network_serial;
+static void *url_configuration_copy(void *self, const char *selector, ...);
 
 static net_object *net_find(void *object)
 {
@@ -86,8 +89,18 @@ static void *session_configuration(void)
 }
 static void *session_configured(void *cls, const char *sel, void *config)
 {
-    (void)cls; (void)sel; net_object *s = net_new("NSURLSession"), *c = net_find(config);
-    if (s && c) s->timeout = c->timeout;
+    (void)cls; (void)sel;
+    net_object *s = net_new("NSURLSession"), *c = net_find(config);
+    if (s && c) {
+        s->configuration = url_configuration_copy(config, "copy");
+        s->timeout = c->timeout;
+        s->custom_timeout = c->custom_timeout;
+        s->cache_policy = c->cache_policy;
+        s->url_cache = cf_owned_retain(c->url_cache);
+        s->cookies = c->cookies;
+        s->pipelining = c->pipelining;
+        s->cellular = c->cellular;
+    }
     return s ? s->object : NULL;
 }
 static void *session_task(void *self, const char *sel, void *request, void *handler)
@@ -96,6 +109,9 @@ static void *session_task(void *self, const char *sel, void *request, void *hand
     net_object *r = net_find(request), *n = net_new("NSURLSessionTask");
     if (!n) return NULL;
     n->token = ++network_serial; n->handler = chm_block_copy(handler);
+    net_object *session = net_find(self);
+    n->url_cache = cf_owned_retain(session ? session->url_cache : NULL);
+    n->cache_policy = session ? session->cache_policy : 0;
     n->url = !strcmp(sel, "dataTaskWithURL:completionHandler:") ? request : r ? r->url : NULL;
     net_object *url = net_find(n->url);
     n->address = strdup(url && url->address ? url->address : "");
@@ -189,10 +205,15 @@ int chm_network_complete(uint64_t token, int status, const void *bytes, size_t l
 static void network_shutdown(void)
 {
     while (net_objects) {
-        net_object *next = net_objects->next;
-        download_discard(net_objects);
-        chm_block_release(net_objects->update); chm_block_release(net_objects->destination);
-        chm_block_release(net_objects->handler);
-        free(net_objects->address); free(net_objects->method); free(net_objects->header_json); free(net_objects); net_objects = next;
+        net_object *value = net_objects;
+        net_objects = value->next;
+        download_discard(value);
+        chm_block_release(value->update); chm_block_release(value->destination);
+        chm_block_release(value->handler);
+        cf_owned_release(value->configuration);
+        cf_owned_release(value->url_cache);
+        cf_owned_release(value->headers);
+        cf_owned_release(value->response);
+        free(value->address); free(value->method); free(value->header_json); free(value);
     }
 }

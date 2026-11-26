@@ -4,6 +4,8 @@ on:
   push:
     paths:
       - ".github/reference/url-storage.m"
+      - "tests/darwin_url_storage.m"
+      - "tests/isrg-root-x1.der"
       - ".github/workflows/url-storage-reference.yml"
   workflow_dispatch:
 
@@ -29,6 +31,10 @@ jobs:
           cp .github/reference/url-storage.m dist/
           xcrun clang -O2 -Wall -Wextra -Werror -Wno-deprecated-declarations -fno-objc-arc .github/reference/url-storage.m -framework Foundation -framework Security -o dist/url-storage-reference
           dist/url-storage-reference "$RUNNER_TEMP/chimera-url-cache" "$PWD/tests/isrg-root-x1.der" > dist/results.jsonl 2> dist/stderr.txt
+          cp tests/darwin_url_storage.m dist/
+          xcrun clang -O2 -Wall -Wextra -Werror -Wno-deprecated-declarations -fno-objc-arc -DCHIMERA_APPLE_REFERENCE tests/darwin_url_storage.m -framework Foundation -framework Security -o dist/darwin-url-storage-reference
+          dist/darwin-url-storage-reference "$RUNNER_TEMP/chimera-url-cache-guest" "$PWD/tests/isrg-root-x1.der" > dist/darwin-url-storage-results.txt
+          grep -F 'url-storage: credentials, trust ownership, response snapshots, URL keys, storage policies, shared cache and configuration passed' dist/darwin-url-storage-results.txt
           python3 - <<'PY'
           import json
           from pathlib import Path

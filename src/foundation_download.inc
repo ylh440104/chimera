@@ -28,6 +28,8 @@ static void *download_task_new(void *manager, void *request, int direct_url, int
     n->headers = req->headers ? o_copy(req->headers, "copy") : fo_dict_new();
     n->body = req->body; n->timeout = req->custom_timeout ? req->timeout : session ? session->timeout : 30;
     n->progress = fo_alloc("NSProgress", 0); n->manager = manager;
+    n->url_cache = cf_owned_retain(session ? session->url_cache : NULL);
+    n->cache_policy = session ? session->cache_policy : 0;
     n->update = chm_block_copy(update); n->destination = chm_block_copy(destination); n->handler = chm_block_copy(completion);
     if (!n->address || !n->method || !n->headers || !n->progress || (update && !n->update) ||
         (destination && !n->destination) || (completion && !n->handler)) return NULL;

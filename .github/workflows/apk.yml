@@ -15,6 +15,9 @@ on:
       - ".github/workflows/apk.yml"
       - "tests/darwin_reachability.m"
       - "tests/darwin_security.m"
+      - "tests/darwin_url_storage.m"
+      - "tests/test_url_storage.c"
+      - "tests/isrg-root-x1.der"
       - "tests/make_security_fixtures.py"
       - "tools/build_crypto.sh"
   workflow_dispatch:
@@ -91,6 +94,8 @@ jobs:
 
           clang-18 -target arm64-apple-ios15.0 -O2 -fno-objc-arc -fno-builtin -fno-stack-protector -c tests/darwin_security.m -o "$RUNNER_TEMP/darwin_security.o"
           ld64.lld-18 -arch arm64 -platform_version ios 15.0 15.0 -e _main -fixup_chains -undefined dynamic_lookup -o android/app/src/androidTest/assets/darwin_security "$RUNNER_TEMP/darwin_security.o"
+          clang-18 -target arm64-apple-ios15.0 -O2 -fno-objc-arc -fno-builtin -fno-stack-protector -c tests/darwin_url_storage.m -o "$RUNNER_TEMP/darwin_url_storage.o"
+          ld64.lld-18 -arch arm64 -platform_version ios 15.0 15.0 -e _main -fixup_chains -exported_symbol _url_storage_check -undefined dynamic_lookup -o android/app/src/androidTest/assets/darwin_url_storage "$RUNNER_TEMP/darwin_url_storage.o"
           python3 -m venv "$RUNNER_TEMP/certificates"
           "$RUNNER_TEMP/certificates/bin/pip" install cryptography==44.0.2
           "$RUNNER_TEMP/certificates/bin/python" tests/make_security_fixtures.py android/app/src/androidTest/assets/security

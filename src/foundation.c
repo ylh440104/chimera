@@ -157,6 +157,9 @@ static const struct {
     { "NSURL", "NSObject", 32 },
     { "NSURLRequest", "NSObject", 32 },
     { "NSMutableURLRequest", "NSURLRequest", 32 },
+    { "NSURLCredential", "NSObject", 32 },
+    { "NSURLCache", "NSObject", 32 },
+    { "NSCachedURLResponse", "NSObject", 32 },
     { "NSURLResponse", "NSObject", 32 },
     { "NSHTTPURLResponse", "NSURLResponse", 32 },
     { "NSURLSession", "NSObject", 32 },
@@ -2272,6 +2275,10 @@ static void *bundle_id(void *self, const char *sel)
 #include "foundation_values.inc"
 #include "foundation_formatters.inc"
 #include "foundation_byte_count.inc"
+#include "foundation_url_values.inc"
+#include "foundation_credentials.inc"
+#include "foundation_url_cache.inc"
+#include "foundation_url_configuration.inc"
 
 static const struct {
     const char *sel;
@@ -2488,6 +2495,10 @@ void chm_foundation_init(chm_session *s)
     chm_objc_register_host(s, filter_methods, sizeof(filter_methods) / sizeof(*filter_methods));
     chm_objc_register_host(s, progress_methods, sizeof(progress_methods) / sizeof(*progress_methods));
     chm_objc_register_host(s, download_methods, sizeof(download_methods) / sizeof(*download_methods));
+    chm_objc_register_host(s, credential_methods, sizeof(credential_methods) / sizeof(*credential_methods));
+    chm_objc_register_host(s, url_value_methods, sizeof(url_value_methods) / sizeof(*url_value_methods));
+    chm_objc_register_host(s, cache_methods, sizeof(cache_methods) / sizeof(*cache_methods));
+    chm_objc_register_host(s, url_configuration_methods, sizeof(url_configuration_methods) / sizeof(*url_configuration_methods));
     for (k = 0; g_methods[k].sel; k++) {
         chm_method_reg m;
 

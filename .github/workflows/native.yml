@@ -69,8 +69,8 @@ jobs:
           for tool in chmdump chmdemand chimera_run; do
             cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -pthread -Iinclude -Ithird_party/yxml -Icrypto-native/include -o "$tool" "tools/$tool.c" $SRC crypto-native/lib/libcrypto.a -lm -ldl -lz
           done
-          for test in test_input test_table test_services test_startup test_transfer test_split test_sync test_libc_compat test_pthread test_streams test_formatters test_choices test_strings test_uttype test_reachability test_security probe_version; do
-            cc -O2 -g -Wall -Wextra -Werror -std=gnu11 -pthread -Iinclude -Ithird_party/yxml -Icrypto-native/include -o "$test" "tests/$test.c" $SRC crypto-native/lib/libcrypto.a -lm -ldl -lz
+          for test in test_input test_table test_services test_startup test_transfer test_split test_sync test_libc_compat test_pthread test_streams test_formatters test_choices test_strings test_uttype test_reachability test_security test_url_storage probe_version; do
+            cc -O2 -g -Wall -Wextra -Werror -Wno-unused-parameter -std=gnu11 -pthread -Iinclude -Ithird_party/yxml -Icrypto-native/include -o "$test" "tests/$test.c" $SRC crypto-native/lib/libcrypto.a -lm -ldl -lz
           done
           ./chmdump tests/fixture.ios > dump.txt
           head -3 dump.txt
@@ -202,6 +202,15 @@ jobs:
           CHM_SANDBOX_ROOT="$PWD/abi-results/security-root" timeout 30 ./test_security "$PWD/abi-results/darwin_security" > abi-results/security.log 2>&1 || { cat abi-results/security.log; exit 1; }
           cat abi-results/security.log
 
+      - name: URL cache and credential regression
+        run: |
+          clang-18 -target arm64-apple-ios15.0 -O2 -fno-objc-arc -fno-builtin -fno-stack-protector -c tests/darwin_url_storage.m -o abi-results/darwin_url_storage.o
+          ld64.lld-18 -arch arm64 -platform_version ios 15.0 15.0 -e _main -fixup_chains -exported_symbol _url_storage_check -undefined dynamic_lookup -o abi-results/darwin_url_storage abi-results/darwin_url_storage.o
+          mkdir -p abi-results/url-storage-root/mobile/security
+          cp tests/isrg-root-x1.der abi-results/url-storage-root/mobile/security/system-root.der
+          CHM_SANDBOX_ROOT="$PWD/abi-results/url-storage-root" timeout 30 ./test_url_storage "$PWD/abi-results/darwin_url_storage" > abi-results/url-storage.log 2>&1 || { cat abi-results/url-storage.log; exit 1; }
+          cat abi-results/url-storage.log
+
       - name: Network reachability regression
         run: |
           clang-18 -target arm64-apple-ios15.0 -O2 -fno-objc-arc -fno-builtin -fno-stack-protector -c tests/darwin_reachability.m -o abi-results/darwin_reachability.o
@@ -304,6 +313,9 @@ jobs:
             abi-results/darwin_security
             abi-results/security.log
             abi-results/security-root/mobile/security
+            abi-results/darwin_url_storage
+            abi-results/url-storage.log
+            abi-results/url-storage-root/mobile/security
             abi-results/darwin_plist
             abi-results/plist.log
             abi-results/plist-root/mobile/*.plist
@@ -339,5 +351,6 @@ jobs:
             test_uttype
             test_reachability
             test_security
+            test_url_storage
             probe_version
           if-no-files-found: error
