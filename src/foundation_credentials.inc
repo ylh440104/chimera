@@ -57,6 +57,7 @@ static void *credential_init_password(void *self, const char *selector, void *us
 
 static void *credential_password(void *cls, const char *selector, void *user, void *password, unsigned long persistence)
 {
+    (void)cls;
     void *object = fo_alloc("NSURLCredential", 0);
     if (!credential_init_password(object, selector, user, password, persistence)) { free(object); return NULL; }
     return object;
@@ -75,6 +76,7 @@ static void *credential_init_trust(void *self, const char *selector, void *trust
 
 static void *credential_trust(void *cls, const char *selector, void *trust)
 {
+    (void)cls;
     void *object = fo_alloc("NSURLCredential", 0);
     if (!credential_init_trust(object, selector, trust)) { free(object); return NULL; }
     return object;
