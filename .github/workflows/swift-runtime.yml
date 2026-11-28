@@ -1,0 +1,42 @@
+name: swift-runtime
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/swift-runtime.yml'
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: download android swift sdk
+        run: |
+          set -e
+          url=https://github.com/finagolfin/swift-android-sdk/releases/download/6.2/swift-6.2-RELEASE-android-24-0.1.artifactbundle.tar.gz
+          mkdir -p sdk
+          curl -fL --retry 4 --retry-all-errors "$url" -o sdk/sdk.tar.gz
+          ls -l sdk/sdk.tar.gz
+          tar -xzf sdk/sdk.tar.gz -C sdk
+          find sdk -maxdepth 4 -type d | head -40
+      - name: locate swift core
+        run: |
+          set -e
+          find sdk -name 'libswiftCore.so' -print
+          find sdk -name 'libc++_shared.so' -print | head -5
+      - name: collect aarch64 runtime
+        run: |
+          set -e
+          mkdir -p out
+          core=$(find sdk -path '*android*aarch64*' -name 'libswiftCore.so' | head -1)
+          test -n "$core"
+          cp "$core" out/libswiftCore.so
+          cxx=$(find sdk -name 'libc++_shared.so' | grep -m1 aarch64 || true)
+          if [ -n "$cxx" ]; then cp "$cxx" out/libc++_shared.so; fi
+          ls -l out
+          file out/libswiftCore.so
+          nm -D --defined-only out/libswiftCore.so | grep -c '\$s' || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: swift-runtime-arm64
+          path: out
+          retention-days: 30
