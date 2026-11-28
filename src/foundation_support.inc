@@ -365,6 +365,27 @@ static void *request_init_url(void *self, const char *sel, void *url)
     return self;
 }
 
+static void *request_header_value(void *self, const char *sel, void *field)
+{
+    (void)sel;
+    net_object *n = net_find(self);
+    if (!n || !fo_is_dict(n->headers)) return NULL;
+    return d_value(n->headers, NULL, field);
+}
+
+static void progress_setting_noop(void *self, const char *sel, ...)
+{
+    (void)self;
+    (void)sel;
+}
+
+static signed char progress_flag_true(void *self, const char *sel)
+{
+    (void)self;
+    (void)sel;
+    return 1;
+}
+
 static void operation_queue_limit(void *self, const char *sel, long count)
 {
     (void)self;
@@ -429,6 +450,15 @@ static const chm_host_method support_methods[] = {
     {"NSProgress", "initWithParent:userInfo:", "@@:@@", progress_init_parent, 0},
     {"NSURL", "URLWithString:relativeToURL:", "@@:@@", url_with_relative, 1},
     {"NSMutableURLRequest", "initWithURL:", "@@:@", request_init_url, 0},
+    {"NSURLRequest", "valueForHTTPHeaderField:", "@@:@", request_header_value, 0},
+    {"NSMutableURLRequest", "valueForHTTPHeaderField:", "@@:@", request_header_value, 0},
+    {"NSProgress", "setCancellable:", "v@:c", progress_setting_noop, 0},
+    {"NSProgress", "setCancellationHandler:", "v@:@?", progress_setting_noop, 0},
+    {"NSProgress", "setPausable:", "v@:c", progress_setting_noop, 0},
+    {"NSProgress", "setPausingHandler:", "v@:@?", progress_setting_noop, 0},
+    {"NSProgress", "setResumingHandler:", "v@:@?", progress_setting_noop, 0},
+    {"NSProgress", "isCancellable", "c@:", progress_flag_true, 0},
+    {"NSProgress", "isPausable", "c@:", progress_flag_true, 0},
     {"NSOperationQueue", "setMaxConcurrentOperationCount:", "v@:q", operation_queue_limit, 0},
     {"NSOperationQueue", "maxConcurrentOperationCount", "q@:", operation_queue_get_limit, 0}
 };

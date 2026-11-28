@@ -34,6 +34,18 @@ __attribute__((objc_root_class))
 - (id)objectAtIndex:(NSUInteger)index;
 @end
 
+@interface NSNumber : NSObject
++ (NSNumber *)numberWithUnsignedInteger:(NSUInteger)value;
+- (NSUInteger)unsignedIntegerValue;
+@end
+
+@interface NSMutableDictionary : NSObject
++ (id)dictionary;
+- (void)setObject:(id)object forKeyedSubscript:(id)key;
+- (id)objectForKeyedSubscript:(id)key;
+- (NSUInteger)count;
+@end
+
 @interface NSMutableData : NSObject
 + (id)data;
 - (void)appendData:(id)data;
@@ -94,6 +106,12 @@ static int support_check(void)
 
     NSURL *absolute = [NSURL URLWithString:[NSString stringWithUTF8String:"https://example.com/root"] relativeToURL:base];
     if (!same_text([[absolute absoluteString] UTF8String], "https://example.com/root")) return 10;
+
+    NSMutableDictionary *map = [NSMutableDictionary dictionary];
+    NSNumber *value = [NSNumber numberWithUnsignedInteger:7];
+    [map setObject:value forKeyedSubscript:[NSNumber numberWithUnsignedInteger:9]];
+    if ([map count] != 1) return 11;
+    if ([map objectForKeyedSubscript:[NSNumber numberWithUnsignedInteger:9]] != value) return 12;
     return 0;
 }
 

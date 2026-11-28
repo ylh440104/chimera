@@ -169,6 +169,11 @@ static void *resolve_imp(void *self, const char *sel, int report)
 
     if (!self || !sel)
         return NULL;
+    if ((uintptr_t)self < 0x10000u) {
+        if (g_active_session)
+            chm_session_log(g_active_session, "invalid receiver %p for %s", self, sel);
+        return NULL;
+    }
     origin = class_name_of((chm_objc_class *)(*(void **)self));
     c = (chm_objc_class *)(*(void **)self);
     if (!c) {
