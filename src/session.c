@@ -444,6 +444,7 @@ int chm_session_load(chm_session *s, const char *exe_path)
 
     for (idx = s->image_count - 1; idx >= 0; idx--)
         chm_objc_session_scan(s, idx);
+    chm_objc_reconcile_classes(s);
     chm_objc_index_methods(s);
     chm_libc_publish_images(s);
     s->prepared = true;

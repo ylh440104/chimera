@@ -92,6 +92,7 @@ void chm_session_report(chm_session *s, char *out, size_t cap);
 
 void chm_objc_session_init(chm_session *s);
 void chm_objc_session_scan(chm_session *s, int img_idx);
+void chm_objc_reconcile_classes(chm_session *s);
 typedef struct {
     const char *owner, *sel, *types;
     void *imp;

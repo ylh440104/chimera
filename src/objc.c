@@ -82,11 +82,77 @@ static const char *class_name(chm_objc_class *c)
     return ro ? ro->name : NULL;
 }
 
+typedef struct {
+    void *cls;
+    size_t size;
+} chm_class_size;
+
+static chm_class_size g_class_sizes[1024];
+static int g_class_size_count;
+
+typedef struct {
+    uint32_t entsize, count;
+} chm_ivar_list;
+
+typedef struct {
+    uint32_t *offset;
+    const char *name;
+    const char *type;
+    uint32_t align, size;
+} chm_ivar;
+
 static size_t class_size(chm_objc_class *c)
 {
-    chm_class_ro *ro = ro_of(c);
+    chm_class_ro *ro;
 
+    if (!c) return 0;
+    for (int i = 0; i < g_class_size_count; i++)
+        if (g_class_sizes[i].cls == c) return g_class_sizes[i].size;
+    ro = ro_of(c);
     return ro ? (size_t)ro->instance_size : 0;
+}
+
+static size_t reconcile_class(chm_objc_class *c, int depth)
+{
+    chm_class_ro *ro;
+    size_t start, size, own, super_size;
+
+    if (!c || depth > 32) return 0;
+    for (int i = 0; i < g_class_size_count; i++)
+        if (g_class_sizes[i].cls == c) return g_class_sizes[i].size;
+    ro = ro_of(c);
+    if (!ro) return 0;
+    super_size = c->superclass ? reconcile_class(c->superclass, depth + 1) : 0;
+    start = ro->instance_start;
+    size = ro->instance_size;
+    own = size > start ? size - start : size;
+    if (start && start < super_size && size > start) {
+        size_t delta = super_size - start;
+        chm_ivar_list *list = (chm_ivar_list *)ro->ivars;
+        if (list && list->count < 4096) {
+            size_t stride = list->entsize & 0xfffcu;
+            if (stride < sizeof(chm_ivar)) stride = sizeof(chm_ivar);
+            for (uint32_t i = 0; i < list->count; i++) {
+                chm_ivar ivar;
+                memcpy(&ivar, (const char *)list + sizeof(*list) + (size_t)i * stride, sizeof(ivar));
+                if (ivar.offset) *ivar.offset += (uint32_t)delta;
+            }
+        }
+        size = super_size + own;
+    }
+    if (g_class_size_count < (int)(sizeof(g_class_sizes) / sizeof(*g_class_sizes))) {
+        g_class_sizes[g_class_size_count].cls = c;
+        g_class_sizes[g_class_size_count].size = size;
+        g_class_size_count++;
+    }
+    return size;
+}
+
+void chm_objc_reconcile_classes(chm_session *s)
+{
+    g_class_size_count = 0;
+    if (!s) return;
+    for (int i = 0; i < s->class_count; i++) reconcile_class(s->classes[i].cls, 0);
 }
 
 #include "objc_methods.inc"
