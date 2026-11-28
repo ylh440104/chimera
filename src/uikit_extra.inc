@@ -87,6 +87,7 @@ static void attr_enumerate(void *self, const char *sel, void *attribute, void *r
 {
     (void)sel;
     (void)options;
+    (void)range;
     attr_record *record = attr_slot(self);
     range_block *invoke = block;
     if (!record || !invoke || !invoke->invoke) return;
