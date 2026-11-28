@@ -431,6 +431,11 @@ static void *alloc_impl(void *cls)
     if (sz < 16) sz = 16;
     void *obj = calloc(1, sz);
     if (obj) *(void **)obj = cls;
+    if (g_active_session && obj) {
+        const char *name = class_name(cls);
+        if (name && (!strncmp(name, "AF", 2) || !strcmp(name, "NSRecursiveLock")))
+            chm_session_log(g_active_session, "alloc %s size=%zu obj=%p", name, sz, obj);
+    }
     return obj;
 }
 
@@ -474,6 +479,8 @@ static void store_strong_impl(void **slot, void *obj)
     void *previous = *slot;
     *slot = chm_foundation_cf_retain(obj);
     release_impl(previous);
+    if (g_active_session && obj && chm_objc_is_kind(obj, "NSRecursiveLock"))
+        chm_session_log(g_active_session, "store lock slot=%p prev=%p obj=%p now=%p", slot, previous, obj, *slot);
 }
 
 static void *autorelease_push_impl(void)
