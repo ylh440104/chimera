@@ -73,6 +73,7 @@ chm_objc_msgSendSuper2_trampoline:
 DARWIN_ENTRY chm_predicate_entry, x3, chm_predicate_list
 DARWIN_ENTRY chm_ns_format_entry, x3, chm_ns_format_list
 DARWIN_ENTRY chm_ns_append_format_entry, x3, chm_ns_append_format_list
+DARWIN_ENTRY chm_ns_set_entry, x3, chm_ns_set_list
 DARWIN_ENTRY chm_printf_entry, x1, chm_printf_list
 DARWIN_ENTRY chm_fprintf_entry, x2, chm_fprintf_list
 DARWIN_ENTRY chm_open_entry, x2, chm_open_list

@@ -386,6 +386,9 @@ void *chm_foundation_alloc_class(void *cls, size_t min)
     if (fo_descends(c, "NSArray")) {
         if (size < sizeof(fo_array)) size = sizeof(fo_array);
         magic = FO_ARRAY_MAGIC;
+    } else if (fo_descends(c, "NSSet")) {
+        if (size < sizeof(fo_array)) size = sizeof(fo_array);
+        magic = FO_ARRAY_MAGIC;
     } else if (fo_descends(c, "NSDictionary")) {
         if (size < sizeof(fo_dict)) size = sizeof(fo_dict);
         magic = FO_DICT_MAGIC;
@@ -2292,7 +2295,8 @@ static void *bundle_id(void *self, const char *sel)
 #include "foundation_credentials.inc"
 #include "foundation_url_cache.inc"
 #include "foundation_url_configuration.inc"
-
+#include "foundation_support.inc"
+#include "foundation_session.inc"
 static const struct {
     const char *sel;
     void *imp;
@@ -2512,6 +2516,8 @@ void chm_foundation_init(chm_session *s)
     chm_objc_register_host(s, url_value_methods, sizeof(url_value_methods) / sizeof(*url_value_methods));
     chm_objc_register_host(s, cache_methods, sizeof(cache_methods) / sizeof(*cache_methods));
     chm_objc_register_host(s, url_configuration_methods, sizeof(url_configuration_methods) / sizeof(*url_configuration_methods));
+    chm_objc_register_host(s, support_methods, sizeof(support_methods) / sizeof(*support_methods));
+    chm_objc_register_host(s, session_methods, sizeof(session_methods) / sizeof(*session_methods));
     for (k = 0; g_methods[k].sel; k++) {
         chm_method_reg m;
 

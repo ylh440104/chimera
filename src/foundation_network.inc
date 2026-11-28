@@ -1,6 +1,7 @@
 typedef struct net_object {
     void *object, *url, *body, *headers, *handler;
     void *progress, *update, *destination, *manager, *response, *url_cache, *configuration;
+    void *delegate, *session, *request;
     unsigned long cache_policy;
     int cookies, pipelining, cellular;
     char *temporary;
@@ -184,7 +185,14 @@ static int network_deliver(uint64_t token, int status, const void *bytes, size_t
     }
     void *handler = n->handler; n->handler = NULL;
     struct { void *isa; int flags, reserved; void (*invoke)(void *, void *, void *, void *); } *block = handler;
-    if (block && block->invoke) block->invoke(block, data, response ? response->object : NULL, error);
+    if (block && block->invoke) {
+        block->invoke(block, data, response ? response->object : NULL, error);
+    } else if (!handler && n->delegate) {
+        n->response = response ? response->object : NULL;
+        if (data)
+            chm_objc_send3(n->delegate, "URLSession:dataTask:didReceiveData:", n->session, n->object, data);
+        chm_objc_send3(n->delegate, "URLSession:task:didCompleteWithError:", n->session, n->object, error);
+    }
     chm_block_release(handler);
     return 1;
 }

@@ -101,6 +101,13 @@ static void *system_image(void *cls, const char *sel, void *name)
     return NULL;
 }
 
+static void *image_named(void *cls, const char *sel, void *name)
+{
+    void *image = system_image(cls, sel, name);
+    if (image) return image;
+    return vector_image((ui_point){24, 24}, g_scale, 0, NULL, 0);
+}
+
 static ui_point image_size(void *self, const char *sel)
 {
     (void)sel;
@@ -187,6 +194,7 @@ static const chm_host_method image_methods[] = {
     {"UIImage", "drawInRect:", "v@:{CGRect={CGPoint=dd}{CGSize=dd}}", image_draw_rect, 0},
     {"UIImage", "scale", "d@:", image_scale, 0},
     {"UIImage", "systemImageNamed:", "@@:@", system_image, 1},
+    {"UIImage", "imageNamed:", "@@:@", image_named, 1},
     {"UIImage", "size", "{CGSize=dd}@:", image_size, 0},
     {"UIImage", "_imageWithSize:", "@@:{CGSize=dd}", image_scaled, 0},
     {"UIImage", "renderingMode", "q@:", image_mode, 0},
