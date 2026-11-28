@@ -32,6 +32,7 @@ typedef struct {
 typedef struct {
     char name[CHM_MAX_NAME];
     uint32_t hits;
+    int32_t image;
     bool weak;
 } chm_missing_sym;
 
@@ -173,6 +174,7 @@ void *chm_foundation_search_paths(unsigned long dir, unsigned long domains, sign
 int chm_foundation_isa_is(void *obj, const char *cls_name);
 void *chm_foundation_alloc_obj(const char *cls_name, size_t min);
 void *chm_foundation_string(const char *bytes);
+void *chm_foundation_error(const char *domain, long code, const char *message);
 void *chm_foundation_constant(const char *symbol);
 int chm_foundation_data_bytes(void *object, const void **bytes, size_t *length);
 void *chm_foundation_data(const void *bytes, size_t length);

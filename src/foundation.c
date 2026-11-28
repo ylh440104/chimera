@@ -275,8 +275,21 @@ static const struct {
     { "UITapGestureRecognizer", "UIGestureRecognizer", 64 },
     { "UIPanGestureRecognizer", "UIGestureRecognizer", 64 },
     { "UILongPressGestureRecognizer", "UIGestureRecognizer", 64 },
+    { "UIPinchGestureRecognizer", "UIGestureRecognizer", 64 },
+    { "UIScreenEdgePanGestureRecognizer", "UIPanGestureRecognizer", 64 },
+    { "UITextView", "UIScrollView", 1024 },
+    { "UIVisualEffectView", "UIView", 1024 },
+    { "UIBlurEffect", "NSObject", 64 },
+    { "UIMenuController", "NSObject", 64 },
+    { "UIMenuItem", "NSObject", 64 },
+    { "UIBezierPath", "NSObject", 64 },
+    { "WKWebView", "UIView", 1024 },
+    { "WKWebViewConfiguration", "NSObject", 96 },
+    { "WKUserScript", "NSObject", 64 },
+    { "ASWebAuthenticationSession", "NSObject", 96 },
     { "CADisplayLink", "NSObject", 64 },
     { "CALayer", "NSObject", 96 },
+    { "CAShapeLayer", "CALayer", 96 },
     { "CAMetalLayer", "CALayer", 96 },
     { "CIFilter", "NSObject", 64 },
     { "CIImage", "NSObject", 64 },
@@ -2549,6 +2562,11 @@ int chm_foundation_isa_is(void *obj, const char *cls_name)
 void *chm_foundation_alloc_obj(const char *cls_name, size_t min)
 {
     return fo_alloc(cls_name, min);
+}
+
+void *chm_foundation_error(const char *domain, long code, const char *message)
+{
+    return make_error(domain, code, message);
 }
 
 void *chm_foundation_string(const char *bytes)

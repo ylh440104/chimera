@@ -190,6 +190,14 @@ static int pt_equal(void *first, void *second)
     return first == second;
 }
 
+static unsigned pt_mach_thread_np(void *handle)
+{
+    pt_thread *thread = handle ? pt_find(handle) : pt_local();
+    if (!thread) return 0;
+    unsigned value = (unsigned)(((uintptr_t)thread >> 4) & 0x0fffffffu);
+    return value ? value : 1;
+}
+
 static int pt_invoke(void *context)
 {
     pt_thread *thread = context;

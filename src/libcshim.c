@@ -896,6 +896,7 @@ static const chm_entry g_entries[] = {
     FN("_pthread_exit", pt_exit, "libc.pthread"),
     FN("_pthread_self", pt_self, "libc.pthread"),
     FN("_pthread_equal", pt_equal, "libc.pthread"),
+    FN("_pthread_mach_thread_np", pt_mach_thread_np, "libc.pthread"),
     FN("_pthread_attr_init", pt_attr_init, "libc.pthread"),
     FN("_pthread_attr_destroy", pt_attr_destroy, "libc.pthread"),
     FN("_pthread_attr_setdetachstate", pt_attr_setdetachstate, "libc.pthread"),

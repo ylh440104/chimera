@@ -23,7 +23,19 @@ static uint64_t g_dispatch_main_q_alias;
 static uint64_t g_ehtype_nsexception;
 static uint64_t g_ksec[10];
 static uint64_t g_gcnote[4];
-static uint64_t g_avcat[2];
+static uint64_t g_avcat[3];
+
+static void *av_category(int index)
+{
+    static const char *names[3] = {"AVAudioSessionCategoryPlayAndRecord", "AVAudioSessionCategorySoloAmbient", "AVAudioSessionCategoryPlayback"};
+    if (index < 0 || index > 2) return NULL;
+    if (!g_avcat[index]) {
+        void *value = chm_foundation_string(names[index]);
+        if (!value) return NULL;
+        g_avcat[index] = (uint64_t)(uintptr_t)value;
+    }
+    return &g_avcat[index];
+}
 static uint64_t g_edge_zero[4];
 static uint64_t g_af_key;
 
@@ -596,6 +608,7 @@ static const fw_entry g_data[] = {
     { "_GCMouseDidDisconnectNotification", &g_gcnote[3] },
     { "_AVAudioSessionCategoryPlayAndRecord", &g_avcat[0] },
     { "_AVAudioSessionCategorySoloAmbient", &g_avcat[1] },
+    { "_AVAudioSessionCategoryPlayback", &g_avcat[2] },
     { NULL, NULL }
 };
 
@@ -612,7 +625,11 @@ void *chm_frameworks_lookup(const char *name)
             return g_fw[i].addr;
     }
     for (i = 0; g_data[i].name; i++)
-        if (!strcmp(g_data[i].name, name)) return g_data[i].addr;
+        if (!strcmp(g_data[i].name, name)) {
+            for (int k = 0; k < 3; k++)
+                if (g_data[i].addr == &g_avcat[k]) return av_category(k);
+            return g_data[i].addr;
+        }
     return chm_foundation_constant(name);
 }
 

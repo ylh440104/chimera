@@ -107,13 +107,17 @@ int main(int argc, char **argv)
     for (int i = 0; i < nf; ++i)
         printf("%-22s %8d %8d\n", fams[i].name, fams[i].syms, fams[i].hits);
 
+    printf("\nmain missing:\n");
+    for (int i = 0; i < s->missing_count; ++i)
+        if (s->missing[i].image == 0) printf("%s\n", s->missing[i].name);
+
     if (argc > 2) {
         FILE *f = fopen(argv[2], "w");
         if (f) {
-            fprintf(f, "symbol,hits,family,weak\n");
+            fprintf(f, "symbol,hits,family,weak,image\n");
             for (int i = 0; i < s->missing_count; ++i)
-                fprintf(f, "\"%s\",%u,%s,%d\n", s->missing[i].name, s->missing[i].hits,
-                        family_of(s->missing[i].name), s->missing[i].weak ? 1 : 0);
+                fprintf(f, "\"%s\",%u,%s,%d,%d\n", s->missing[i].name, s->missing[i].hits,
+                        family_of(s->missing[i].name), s->missing[i].weak ? 1 : 0, s->missing[i].image);
             fclose(f);
         }
     }

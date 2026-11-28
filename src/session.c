@@ -198,13 +198,14 @@ static bool already_loaded(chm_session *s, const char *path)
     return false;
 }
 
-static void record_missing(chm_session *s, const char *name, bool weak)
+static void record_missing(chm_session *s, int32_t image, const char *name, bool weak)
 {
     int i;
 
     for (i = 0; i < s->missing_count; i++) {
         if (strcmp(s->missing[i].name, name) == 0) {
             s->missing[i].hits++;
+            if (image < s->missing[i].image) s->missing[i].image = image;
             return;
         }
     }
@@ -213,6 +214,7 @@ static void record_missing(chm_session *s, const char *name, bool weak)
 
         snprintf(m->name, sizeof(m->name), "%s", name);
         m->hits = 1;
+        m->image = image;
         m->weak = weak;
     }
 }
@@ -223,6 +225,9 @@ static int session_resolve(const chm_image *img, int32_t ordinal, const char *na
     chm_session *s = ctx;
     void *p;
     int i;
+    int32_t image = -1;
+
+    if (img >= s->images && img < s->images + CHM_MAX_IMAGES) image = (int32_t)(img - s->images);
 
     if (ordinal == 0) {
         p = chm_sym((chm_image *)img, name);
@@ -257,7 +262,7 @@ static int session_resolve(const chm_image *img, int32_t ordinal, const char *na
         *out = (uint64_t)(uintptr_t)p;
         return 1;
     }
-    record_missing(s, name, weak);
+    record_missing(s, image, name, weak);
     *out = 0;
     return 0;
 }

@@ -1618,6 +1618,8 @@ static const struct {
     { NULL, NULL }
 };
 
+static void launch_reset(void);
+
 void chm_ui_shutdown(chm_session *s)
 {
     if (!s || s != g_sess) return;
@@ -1629,6 +1631,7 @@ void chm_ui_shutdown(chm_session *s)
     tables_shutdown();
     choices_reset();
     symbols_reset();
+    launch_reset();
     memset(view_index, 0, sizeof(view_index));
     while (views) {
         ui_view *next = views->next;
@@ -1669,6 +1672,8 @@ void chm_ui_shutdown(chm_session *s)
     g_running = 0;
 }
 
+#include "uikit_launch.inc"
+
 #include "ui_split_methods.inc"
 
 void chm_ui_init(chm_session *s)
@@ -1678,6 +1683,7 @@ void chm_ui_init(chm_session *s)
     if (!s) return;
     chm_ui_shutdown(g_sess);
     g_sess = s;
+    chm_objc_register_host(s, launch_methods, sizeof(launch_methods) / sizeof(*launch_methods));
     chm_objc_register_host(s, split_methods, sizeof(split_methods) / sizeof(*split_methods));
     chm_objc_register_host(s, clock_methods, sizeof(clock_methods) / sizeof(*clock_methods));
     chm_objc_register_host(s, image_methods, sizeof(image_methods) / sizeof(*image_methods));
