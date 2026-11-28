@@ -145,6 +145,8 @@ void chm_foundation_init(chm_session *s);
 void chm_foundation_shutdown(void);
 int chm_foundation_class_count(void);
 void *chm_foundation_lookup_class(const char *name);
+extern void (*chm_web_render_hook)(void *, const void *, size_t);
+void *chm_network_page(const char *address, void *view);
 void *chm_foundation_lookup_metaclass(const char *name);
 void *chm_foundation_class_ro(void *cls);
 void *chm_foundation_alloc_class(void *cls, size_t min);

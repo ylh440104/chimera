@@ -1674,6 +1674,7 @@ void chm_ui_shutdown(chm_session *s)
 
 #include "uikit_launch.inc"
 #include "uikit_toolkit.inc"
+#include "uikit_extra.inc"
 
 #include "ui_split_methods.inc"
 
@@ -1685,6 +1686,8 @@ void chm_ui_init(chm_session *s)
     chm_ui_shutdown(g_sess);
     g_sess = s;
     chm_objc_register_host(s, toolkit_methods, sizeof(toolkit_methods) / sizeof(*toolkit_methods));
+    chm_objc_register_host(s, extra_methods, sizeof(extra_methods) / sizeof(*extra_methods));
+    chm_web_render_hook = web_render_bytes;
     chm_objc_register_host(s, launch_methods, sizeof(launch_methods) / sizeof(*launch_methods));
     chm_objc_register_host(s, split_methods, sizeof(split_methods) / sizeof(*split_methods));
     chm_objc_register_host(s, clock_methods, sizeof(clock_methods) / sizeof(*clock_methods));

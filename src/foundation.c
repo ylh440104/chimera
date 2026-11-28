@@ -129,6 +129,7 @@ static fo_class *g_classes[FO_MAX_CLASSES];
 static unsigned long sec_type_id(void *object);
 static int g_class_count;
 static chm_session *g_session;
+void (*chm_web_render_hook)(void *, const void *, size_t);
 static fo_pair g_pairs[FO_MAX_ITEMS];
 static int g_pair_count;
 
@@ -286,6 +287,16 @@ static const struct {
     { "WKWebView", "UIView", 1024 },
     { "WKWebViewConfiguration", "NSObject", 96 },
     { "WKUserScript", "NSObject", 64 },
+    { "WKUserContentController", "NSObject", 96 },
+    { "WKWebsiteDataStore", "NSObject", 64 },
+    { "WKPreferences", "NSObject", 64 },
+    { "WKProcessPool", "NSObject", 64 },
+    { "WKWebpagePreferences", "NSObject", 64 },
+    { "WKNavigationAction", "NSObject", 64 },
+    { "WKNavigation", "NSObject", 64 },
+    { "UIMenu", "NSObject", 64 },
+    { "UIAction", "NSObject", 64 },
+    { "UIMenuElement", "NSObject", 64 },
     { "ASWebAuthenticationSession", "NSObject", 96 },
     { "CADisplayLink", "NSObject", 64 },
     { "CALayer", "NSObject", 96 },
@@ -2297,6 +2308,7 @@ static void *bundle_id(void *self, const char *sel)
 #include "foundation_url_configuration.inc"
 #include "foundation_support.inc"
 #include "foundation_session.inc"
+#include "foundation_extra.inc"
 static const struct {
     const char *sel;
     void *imp;
@@ -2518,6 +2530,7 @@ void chm_foundation_init(chm_session *s)
     chm_objc_register_host(s, url_configuration_methods, sizeof(url_configuration_methods) / sizeof(*url_configuration_methods));
     chm_objc_register_host(s, support_methods, sizeof(support_methods) / sizeof(*support_methods));
     chm_objc_register_host(s, session_methods, sizeof(session_methods) / sizeof(*session_methods));
+    chm_objc_register_host(s, extra_foundation_methods, sizeof(extra_foundation_methods) / sizeof(*extra_foundation_methods));
     for (k = 0; g_methods[k].sel; k++) {
         chm_method_reg m;
 

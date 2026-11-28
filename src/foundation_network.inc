@@ -1,7 +1,7 @@
 typedef struct net_object {
     void *object, *url, *body, *headers, *handler;
     void *progress, *update, *destination, *manager, *response, *url_cache, *configuration;
-    void *delegate, *session, *request;
+    void *delegate, *session, *request, *web_view;
     unsigned long cache_policy;
     int cookies, pipelining, cellular;
     char *temporary;
@@ -174,6 +174,14 @@ static int network_deliver(uint64_t token, int status, const void *bytes, size_t
     while (n && n->token != token) n = n->next;
     if (!n || n->state == 3 || length > 32u * 1024u * 1024u) return 0;
     if (n->download) return download_finish(n, status, headers, failure);
+    if (n->web_view) {
+        if (chm_web_render_hook && !failure && bytes)
+            chm_web_render_hook(n->web_view, bytes, length);
+        else if (chm_web_render_hook)
+            chm_web_render_hook(n->web_view, "</html>", 7);
+        n->state = 3;
+        return 1;
+    }
     int cancelled = n->cancelled;
     n->state = 3;
     void *error = cancelled || (failure && *failure) ? make_error("NSURLErrorDomain", cancelled ? -999 : -1004, cancelled ? "Request cancelled" : failure) : NULL;
@@ -209,6 +217,21 @@ int chm_network_complete(uint64_t token, int status, const void *bytes, size_t l
     int rc = chm_session_callback(g_session, network_body, &result);
     if (rc == -2) g_session->exit_code = -2;
     return rc;
+}
+
+void *chm_network_page(const char *address, void *view)
+{
+    if (!address || !*address) return NULL;
+    net_object *n = net_new("NSURLSessionTask");
+    if (!n) return NULL;
+    n->token = ++network_serial;
+    n->address = strdup(address);
+    n->method = strdup("GET");
+    n->headers = fo_dict_new();
+    n->timeout = 30;
+    n->web_view = view;
+    n->state = 0;
+    return n->address && n->method && n->headers ? n->object : NULL;
 }
 static void network_shutdown(void)
 {
