@@ -478,13 +478,22 @@ static void web_load_address(void *self, const char *address)
     chm_session_log(g_sess, "webkit: unsupported scheme %s", address);
 }
 
+static const char *request_address(void *request)
+{
+    if (!request) return NULL;
+    void *url = chm_objc_send0(request, "URL");
+    if (url) {
+        const char *text = chm_foundation_cstr(chm_objc_send0(url, "absoluteString"));
+        if (text) return text;
+    }
+    return chm_foundation_cstr(chm_objc_send0(request, "absoluteString"));
+}
+
 static void web_load_request_new(void *self, const char *sel, void *request, void *base)
 {
     (void)sel;
     (void)base;
-    const char *address = request ? chm_foundation_cstr(chm_objc_send0(request, "URL")) : NULL;
-    if (!address && request) address = chm_foundation_cstr(chm_objc_send0(request, "absoluteString"));
-    web_load_address(self, address);
+    web_load_address(self, request_address(request));
 }
 
 static void web_load_html(void *self, const char *sel, void *html, void *base)
@@ -502,6 +511,22 @@ static void web_load_file_url(void *self, const char *sel, void *url, void *read
     (void)read_access;
     const char *address = url ? chm_foundation_cstr(chm_objc_send0(url, "absoluteString")) : NULL;
     web_load_address(self, address);
+}
+
+static void *controller_content_controller(void *self, const char *sel)
+{
+    (void)sel;
+    launch_object *value = launch_record(self);
+    if (!value) return NULL;
+    if (!value->third) value->third = chm_foundation_alloc_obj("WKUserContentController", 0);
+    return value->third;
+}
+
+static void controller_set_content_controller(void *self, const char *sel, void *controller)
+{
+    (void)sel;
+    launch_object *value = launch_record(self);
+    if (value) value->third = controller;
 }
 
 static void web_set_navigation_delegate(void *self, const char *sel, void *delegate)
@@ -661,5 +686,7 @@ static const chm_host_method extra_methods[] = {
     {"WKUserContentController", "init", "@@:", user_content_new, 0},
     {"WKUserContentController", "addUserScript:", "v@:@", user_content_add_script, 0},
     {"WKUserContentController", "userScripts", "@@:", user_content_scripts, 0},
-    {"WKUserContentController", "removeAllUserScripts", "v@:", user_content_remove_all, 0}
+    {"WKUserContentController", "removeAllUserScripts", "v@:", user_content_remove_all, 0},
+    {"UIViewController", "userContentController", "@@:", controller_content_controller, 0},
+    {"UIViewController", "setUserContentController:", "v@:@", controller_set_content_controller, 0}
 };

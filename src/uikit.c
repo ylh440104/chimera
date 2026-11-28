@@ -1686,7 +1686,6 @@ void chm_ui_init(chm_session *s)
     chm_ui_shutdown(g_sess);
     g_sess = s;
     chm_objc_register_host(s, toolkit_methods, sizeof(toolkit_methods) / sizeof(*toolkit_methods));
-    chm_objc_register_host(s, extra_methods, sizeof(extra_methods) / sizeof(*extra_methods));
     chm_web_render_hook = web_render_bytes;
     chm_objc_register_host(s, launch_methods, sizeof(launch_methods) / sizeof(*launch_methods));
     chm_objc_register_host(s, split_methods, sizeof(split_methods) / sizeof(*split_methods));
@@ -1695,6 +1694,7 @@ void chm_ui_init(chm_session *s)
     chm_objc_register_host(s, choice_methods, sizeof(choice_methods) / sizeof(*choice_methods));
     static const chm_host_method cell_image = {"UITableViewCell", "imageView", "@@:", cell_part, 0};
     chm_objc_register_host(s, &cell_image, 1);
+    chm_objc_register_host(s, extra_methods, sizeof(extra_methods) / sizeof(*extra_methods));
     chm_scene_application_role = chm_foundation_string(CHM_APPLICATION_ROLE);
     for (i = 0; g_ui_methods[i].sel; i++) {
         chm_method_reg m;
