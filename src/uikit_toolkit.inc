@@ -379,23 +379,22 @@ static void *bar_item_view(void *self, const char *sel)
     return value ? value->first : NULL;
 }
 
-static void *font_with_size(void *cls, const char *sel, double size)
+static void *font_with_size(void *self, const char *sel, double size)
 {
-    (void)cls;
+    (void)self;
     (void)sel;
-    if (!isfinite(size) || size <= 0 || size > 512) return NULL;
-    void *font = chm_foundation_alloc_obj("UIFont", 0);
-    launch_object *value = launch_record(font);
-    if (!value) return NULL;
-    value->values[0] = size;
-    return font;
-}
-
-static double toolkit_font_size(void *self, const char *sel)
-{
-    (void)sel;
-    launch_object *value = launch_find(self);
-    return value && value->values[0] ? value->values[0] : 17;
+    if (!isfinite(size) || size <= 0 || size > 1024) return NULL;
+    ui_font *font = calloc(1, sizeof(*font));
+    if (!font) return NULL;
+    font->object = chm_foundation_alloc_obj("UIFont", 0);
+    if (!font->object) {
+        free(font);
+        return NULL;
+    }
+    font->size = size;
+    font->next = fonts;
+    fonts = font;
+    return font->object;
 }
 
 static const chm_host_method toolkit_methods[] = {
@@ -465,6 +464,5 @@ static const chm_host_method toolkit_methods[] = {
     {"UIAlertController", "sourceView", "@@:", alert_get_part, 0},
     {"UIAlertController", "setSourceRect:", "v@:{CGRect={CGPoint=dd}{CGSize=dd}}", alert_set_rect, 0},
     {"UISplitViewController", "displayModeButtonItem", "@@:", split_mode_button, 0},
-    {"UIFont", "fontWithSize:", "@@:d", font_with_size, 1},
-    {"UIFont", "pointSize", "d@:", toolkit_font_size, 0}
+    {"UIFont", "fontWithSize:", "@@:d", font_with_size, 0}
 };
